@@ -39,6 +39,13 @@ Thresholds changed to pass the gate (each with its reason in health.py):
   These came from the bfs, hot-room and CHT cases.
 - ``residuals_high`` takes U as its worst component: run2-fixed (3-D, Ux, Uy and Uz) never
   reaches its 0.05 watch band (its U first residuals stay near 1e-3).
+- ``residuals_stalled`` reads the geometric mean of each field's last 10 first residuals
+  (``STALL_SMOOTH``), for its 1e-3 floor and its samples every 50 iterations; its Unhealthy
+  rule keeps the raw value. The validation set's turbulent pipe (k-omega SST, Hex-dominant)
+  settles with omega alternating 1.06e-3 / 0.90e-3 between odd and even iterations: read one
+  iteration at a time, the stall switched on and off every iteration and held "Watch closely"
+  to the end with no finding to say why (test_health_reasons.py). bfs-steady's watch episode
+  now ends at iteration 769 instead of 764.
 
 ``bfs-pimple3-co5`` has 243 scored steps, so the step floor below is 240, not the spec's 300;
 every other case, run2-fixed included, has more than 300.

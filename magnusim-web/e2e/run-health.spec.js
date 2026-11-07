@@ -15,12 +15,23 @@
 //   Cancel posts nothing.
 // - An old run with a log and no health record says it ran before health checks existed;
 //   "Check its log" brings a verdict.
+// - A verdict always says why (old steady runs, the logs of python/tests/unit/health_steady_logs.py):
+//   the validation pipe's pattern (k-omega SST on Hex-dominant: k and omega bounded every
+//   iteration, omega's first residual 1.06e-3 / 0.90e-3 on odd / even iterations) reads Healthy
+//   with its two info rows; a stall that clears just before the run ends reads "Watch closely"
+//   with the stall's warn row saying it cleared and why the verdict stays. Both after a reload,
+//   and the run health read the Assistant's read_results takes carries the same rows. The pipe's
+//   log solved by the fake compute (its own server) reads Healthy all the way. Before the fix the
+//   pipe read "Watch closely" (from iteration 551 while it solved) and the stall showed no warn
+//   row: only info rows.
 // Fails on the code before RH1: the Run panel had no Health block.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { spawnSync } from 'node:child_process';
 import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
+import { PYTHON } from '../scripts/python-env.js';
 import { seedElbowProject } from './prepare-projects.js';
 import { openRunPanel } from './support/compute-slot.js';
 import { e2eTemp, startHost } from './support/host-server.mjs';
@@ -28,6 +39,7 @@ import { expect, test } from './support/stress.js';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..');
 const HEALTH = join(WEB, 'python', 'tests', 'fixtures', 'health');
+const STEADY_LOGS = join(WEB, 'python', 'tests', 'unit', 'health_steady_logs.py');
 const CAVITY = join(WEB, 'python', 'tests', 'fixtures', 'foam-results', 'cavity-2d');
 const PID = 'run-health-e2e';
 const STEP = { timeout: 30_000 };
@@ -252,4 +264,215 @@ test('an old run with a log and no health record: "Check its log" brings a verdi
   // It stays after a reload: the record is the run's.
   await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
   await expect(chip(page)).toHaveText('Unhealthy', STEP);
+});
+
+/** The finding rows the panel shows: code, level and words. */
+const rowsOf = (panel) =>
+  panel.locator('[data-run-health-finding]').evaluateAll((els) =>
+    els.map((el) => ({
+      code: el.getAttribute('data-run-health-finding'),
+      level: el.getAttribute('data-level'),
+      text: String(el.querySelector('[data-run-health-text="1"]')?.textContent || ''),
+    })),
+  );
+
+/** The rows of a run's health record as the Assistant's read_results {kind:'health'} reads it (its host read run.health: /api/run/health). */
+async function hostRows(request, base, pid, simId, rid) {
+  const got = await (await request.get(`${base}/api/run/health?project_id=${pid}&simulation_id=${simId}&run_id=${rid}`)).json();
+  return { verdict: got.health?.verdict, rows: (got.health?.findings || []).map((f) => ({ code: f.code, level: f.level, text: f.text })) };
+}
+
+/** The validation pipe's two info rows (k-omega SST on Hex-dominant, health_steady_logs.py c2_sst). */
+const PIPE_ROWS = [
+  { code: 'bounded_from_start', level: 'info', text: 'omega was negative from the first iteration (lowest -764 against a mean of 850): check the inlet values or the mesh.' },
+  { code: 'not_settled', level: 'info', text: 'It ended without its residuals meeting their targets: its results may not have settled.' },
+];
+
+test.describe('a verdict always says why', () => {
+  /** @type {string[]} the runs a test made, deleted in afterEach (with the page closed first). */
+  let made = [];
+
+  test.afterEach(async ({ page, request }) => {
+    await page.close();
+    for (const rid of made) await request.post(api('/api/run/delete'), { data: { project_id: PID, simulation_id: sim, run_id: rid } }).catch(() => {});
+    made = [];
+  });
+
+  /** An ended steady run whose case holds the synthetic log `log` and its hints, with no health record. */
+  async function oldSteadyRun(request, name, log) {
+    const created = await postOk(request, '/api/run/create', { project_id: PID, simulation_id: sim, name, mesh_id: meshId });
+    const rid = String(created.run_id || created.run?.id || created.run?.run_id);
+    made.push(rid);
+    const runDir = dirname((await runRow(request, rid)).case_dir);
+    const caseDir = join(runDir, 'case');
+    const wrote = spawnSync(PYTHON, [STEADY_LOGS, log, caseDir], { encoding: 'utf8', windowsHide: true });
+    expect(wrote.status, wrote.stderr).toBe(0);
+    const runJson = join(runDir, 'run.json');
+    const rec = JSON.parse(readFileSync(runJson, 'utf8'));
+    const iterations = log === 'stall_end' ? 1000 : 2500;
+    writeFileSync(
+      runJson,
+      JSON.stringify({
+        ...rec,
+        status: 'done',
+        stage: 'done',
+        time_dependency: 'Steady-state',
+        path_kind: 'simpleFoam',
+        analysis_key: 'incompressible_steady',
+        has_results: false,
+        n_steps: iterations,
+        sim_time: iterations,
+        started_at: new Date(Date.now() - 60_000).toISOString(),
+        finished_at: new Date().toISOString(),
+        case_dir: caseDir,
+      }),
+    );
+    return rid;
+  }
+
+  /** "Check its log" on the run, then the chip's word. */
+  async function checkItsLog(page, rid, word) {
+    const panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
+    await expect(panel.locator('[data-run-health-before="1"]')).toHaveText('This run ran before health checks existed.', STEP);
+    await panel.locator('[data-run-health-check="1"]').click();
+    await expect(chip(page)).toHaveText(word, { timeout: 60_000 });
+    return panel;
+  }
+
+  test("the validation pipe's pattern reads Healthy with its two info rows, after a reload too", async ({ page, request }) => {
+    test.setTimeout(180_000);
+    const rid = await oldSteadyRun(request, 'Pipe SST', 'c2_sst');
+    let panel = await checkItsLog(page, rid, 'Healthy');
+    const want = PIPE_ROWS;
+    await expect.poll(() => rowsOf(panel), STEP).toEqual(want);
+    await expect(chip(page)).toHaveAttribute('title', /^No stability problems found in the last 50 iterations\./);
+    // It stays after a reload, and the Assistant reads the same record.
+    panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
+    await expect(chip(page)).toHaveText('Healthy', STEP);
+    await expect.poll(() => rowsOf(panel), STEP).toEqual(want);
+    expect(await hostRows(request, host.base, PID, sim, rid)).toEqual({ verdict: 'healthy', rows: want });
+  });
+
+  test('a stall that clears just before the end reads Watch closely with the stall saying why, after a reload too', async ({ page, request }) => {
+    test.setTimeout(180_000);
+    const rid = await oldSteadyRun(request, 'Stalled', 'stall_end');
+    let panel = await checkItsLog(page, rid, 'Watch closely');
+    const stall = {
+      code: 'residuals_stalled',
+      level: 'warn',
+      text:
+        "The omega residual has stopped falling at about 0.002 (0.002 about 500 iterations before); a steady run's residuals should keep falling. " +
+        'It cleared at iteration 998; Watch closely stays until 5 iterations in a row are better (3 so far).',
+    };
+    const settled = { code: 'not_settled', level: 'info', text: 'It ended without its residuals meeting their targets: its results may not have settled.' };
+    await expect.poll(() => rowsOf(panel), STEP).toEqual([stall, settled]);
+    await expect(panel.locator('[data-run-health-finding="residuals_stalled"] [data-run-health-evidence="1"]')).toHaveText('Show in log');
+    // It stays after a reload, and the Assistant reads the same record.
+    panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
+    await expect(chip(page)).toHaveText('Watch closely', STEP);
+    await expect.poll(() => rowsOf(panel), STEP).toEqual([stall, settled]);
+    expect(await hostRows(request, host.base, PID, sim, rid)).toEqual({ verdict: 'watch', rows: [stall, settled] });
+  });
+});
+
+// The same pattern while it solves: the fake compute replays the pipe's log through the real
+// tracker (MAGNUSIM_TEST_SOLVE_LOG) on its own server, a steady study. Before the fix its chip
+// went "Watch closely" at iteration 551 and stayed, with only info rows.
+test.describe('a solving run that settles like the validation pipe', () => {
+  const SPID = 'run-health-steady-e2e';
+  let live;
+  let ssim;
+  let smesh;
+  let made = [];
+
+  test.beforeAll(async ({ request }) => {
+    test.setTimeout(240_000);
+    const tmp = e2eTemp('run-health-steady');
+    const logDir = join(tmp, 'log');
+    const wrote = spawnSync(PYTHON, [STEADY_LOGS, 'c2_sst', logDir], { encoding: 'utf8', windowsHide: true });
+    expect(wrote.status, wrote.stderr).toBe(0);
+    const hints = join(logDir, 'c2_sst.hints.json');
+    writeFileSync(hints, JSON.stringify(JSON.parse(readFileSync(join(logDir, 'w27-case.json'), 'utf8')).health_hints));
+    const projects = join(tmp, 'projects');
+    mkdirSync(projects, { recursive: true });
+    seedElbowProject(projects, SPID, 'Steady health project');
+    live = await startHost({
+      name: 'run-health-steady',
+      tmp,
+      projects,
+      env: {
+        MAGNUSIM_TEST_COMPUTE: 'fake',
+        MAGNUSIM_TEST_MESH_SECONDS: '1',
+        MAGNUSIM_TEST_SOLVE_SECONDS: '4',
+        MAGNUSIM_TEST_SOLVE_LOG: join(logDir, 'log.simpleFoam'),
+        MAGNUSIM_TEST_SOLVE_HINTS: hints,
+        MAGNUSIM_TEST_SOLVE_PACE_MS: '3',
+        PYTHONPATH: [join(WEB, 'python'), join(WEB, 'python', 'sdk'), process.env.PYTHONPATH || ''].filter(Boolean).join(delimiter),
+      },
+    });
+    const doc = await (await request.get(`${live.base}/api/mesh?project_id=${SPID}`)).json();
+    ssim = doc.simulation_id;
+    smesh = String(doc.mesh.id);
+    const gen = await request.post(`${live.base}/api/mesh/generate`, { data: { project_id: SPID, simulation_id: ssim, mesh_id: smesh } });
+    expect(gen.status(), await gen.text()).toBeLessThan(300);
+    await expect
+      .poll(async () => (await (await request.get(`${live.base}/api/mesh?project_id=${SPID}&mesh_id=${smesh}`)).json()).mesh?.live_mesh_result?.status, { timeout: 90_000 })
+      .toBe('done');
+    const up = await request.post(`${live.base}/api/simulation/update`, { data: { project_id: SPID, simulation_id: ssim, time_dependency: 'Steady-state' } });
+    expect(up.ok(), await up.text()).toBe(true);
+  });
+
+  test.afterAll(async () => {
+    live?.stop();
+  });
+
+  test.afterEach(async ({ page, request }) => {
+    await page.close();
+    for (const rid of made) {
+      await request.post(`${live.base}/api/run/stop`, { data: { project_id: SPID, simulation_id: ssim, run_id: rid } }).catch(() => {});
+      await request.post(`${live.base}/api/run/delete`, { data: { project_id: SPID, simulation_id: ssim, run_id: rid } }).catch(() => {});
+    }
+    made = [];
+  });
+
+  test('it reads Healthy all the way, then its two info rows, after a reload too', async ({ page, request }) => {
+    test.setTimeout(240_000);
+    const post = async (path, data) => {
+      const r = await request.post(`${live.base}${path}`, { data });
+      const j = await r.json().catch(() => ({}));
+      expect(r.ok(), `${path}: ${r.status()} ${JSON.stringify(j)}`).toBe(true);
+      return j;
+    };
+    const created = await post('/api/run/create', { project_id: SPID, simulation_id: ssim, name: 'Pipe SST', mesh_id: smesh });
+    const rid = String(created.run_id || created.run?.id || created.run?.run_id);
+    made.push(rid);
+    let panel = await openRunPanel(page, { base: live.base, projectId: SPID, simulationId: ssim, runId: rid });
+    // Every chip word the page shows, in order.
+    await page.evaluate(() => {
+      const w = /** @type {any} */ (window);
+      w.__chips = [];
+      const note = () => {
+        const c = document.querySelector('#panel-sim-control [data-run-health]');
+        const text = c ? String(c.textContent || '') : '';
+        if (text && w.__chips[w.__chips.length - 1] !== text) w.__chips.push(text);
+      };
+      new MutationObserver(note).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true });
+    });
+    await post('/api/run/start', { project_id: SPID, simulation_id: ssim, run_id: rid });
+    const status = async () =>
+      ((await (await request.get(`${live.base}/api/run/status?project_id=${SPID}&simulation_id=${ssim}`)).json()).runs || []).find((r) => String(r.id) === rid) || {};
+    // Past iteration 551 while it solves (where it turned "Watch closely"), then done.
+    await expect.poll(async () => Number((await status()).n_steps) || 0, { timeout: 90_000 }).toBeGreaterThan(600);
+    await expect.poll(async () => (await status()).status, { timeout: 90_000 }).toBe('done');
+    await expect(chip(page)).toHaveText('Healthy', STEP);
+    const chips = await page.evaluate(() => /** @type {any} */ (window).__chips);
+    expect(chips, chips.join(' | ')).toContain('Healthy');
+    expect(chips, chips.join(' | ')).not.toContain('Watch closely');
+    await expect.poll(() => rowsOf(panel), STEP).toEqual(PIPE_ROWS);
+    // It stays after a reload, and the Assistant reads the same record.
+    panel = await openRunPanel(page, { base: live.base, projectId: SPID, simulationId: ssim, runId: rid });
+    await expect(chip(page)).toHaveText('Healthy', STEP);
+    await expect.poll(() => rowsOf(panel), STEP).toEqual(PIPE_ROWS);
+    expect(await hostRows(request, live.base, SPID, ssim, rid)).toEqual({ verdict: 'healthy', rows: PIPE_ROWS });
+  });
 });

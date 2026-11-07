@@ -2524,7 +2524,7 @@ A solver log's health, line by line. ``hints`` are the analysis's ``health_hints
 - `converged() -> None`: The analysis's parser said the run converged (its ``converged`` event).
 - `missing_head() -> None`: The start of the log is gone (deleted parts): its onset is unknown.
 - `extras(cur: _Step) -> None`
-- `codes() -> list[str]`: The codes at watch or worse, and the info ones, in finding order.
+- `codes() -> list[str]`: The codes at watch or worse, the info ones and the held ones, in finding order.
 - `restart(latest_saved: float | None = None) -> str | None`: Where Continue would go on from, against the onset (spec 3.6): ``from_zero``, ``continue_after_fix`` or None. It never says Continue will be healthy.
 - `report(*, latest_saved: float | None = None, final: bool = False) -> dict[str, Any]`: The run record's ``health`` (at most 4 KB, ``shrink``).
 
@@ -2598,8 +2598,11 @@ Constants:
 - `GAP_SETTLE = 5`
 - `DISSIPATION_FIELDS = ("omega", "epsilon")`
 - `DISSIPATION_WATCH_GROWTH = 2.0`
+- `STALL_SMOOTH = 10`
+- `WORDS_EVERY = 5`
 - `TIMELINE_MAX = 20`
 - `VERDICT_RANK = {"healthy": 0, "watch": 1, "unhealthy": 2, "failed": 3}`
+- `VERDICT_WORDS = {"healthy": "Healthy", "watch": "Watch closely", "unhealthy": "Unhealthy", "failed": "Failed"}`
 - `LEVEL_WORD = {0: "", 1: "warn", 2: "error"}`
 - `LEVEL_RANK = {"error": 0, "warn": 1, "info": 2}`
 - `NUM = r"([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?|[-+]?(?i:nan|inf))"`
