@@ -473,7 +473,7 @@ describe('hole', () => {
       const doc = h.doc.state.get().doc;
       const six = [2, 7, 12, 17, 22, 27].map((x) => CTR(`${x} mm`, '-18 mm', ''));
       const many = await fail(h, 'hole', HOLE({ centers: six, diameter: '', size: 'M3', fit: 'tapped', thread: 'modelled', depth: 'blind', distance: '15 mm' }));
-      expect(many.message).toBe('bad_input: thread: 6 modelled M3x0.5 threads 15 mm deep are up to 174 turns in all, more than the 160 one thread cuts at once (it would take minutes): use thread cosmetic, fewer holes, or shallower ones.');
+      expect(many.message).toBe('bad_input: thread: 6 modelled M3x0.5 threads 15 mm deep are up to 174 turns in all, more than the 160 one thread cuts at once (the cut slows with every turn): use thread cosmetic, fewer holes, or shallower ones.');
       const long = await fail(h, 'hole', HOLE({ centers: [CTR('25 mm', '15 mm', '')], diameter: '', size: 'M3', fit: 'tapped', thread: 'modelled', depth: 'blind', distance: '70 mm' }));
       expect(long.message).toBe('bad_input: thread: a modelled M3x0.5 thread 70 mm deep is up to 139 turns, more than 120 a hole: use thread cosmetic, or a hole at most 60.5 mm deep.');
       const shallow = await fail(h, 'hole', HOLE({ centers: [CTR('25 mm', '15 mm', '')], diameter: '', size: 'M6', fit: 'tapped', thread: 'modelled', depth: 'blind', distance: '1.5 mm' }));

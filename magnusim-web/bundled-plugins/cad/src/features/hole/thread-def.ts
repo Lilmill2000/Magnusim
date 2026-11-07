@@ -229,7 +229,7 @@ export const threadDef: FeatureTypeDef<ThreadFeature, ThreadValues> = {
       spans.push(mine);
     }
     const all = spans.reduce((t, mine) => t + mine.reduce((u, [a, b]) => u + (b - a) / P, 0), 0);
-    if (all > THREAD_TURNS_TOTAL_MAX) return { ok: false, message: `${f.name} failed: ${spans.length} holes of ${th.designation} are ${Math.ceil(all)} turns in all, more than the ${THREAD_TURNS_TOTAL_MAX} one thread cuts at once (the cut would take minutes): a shorter Length, fewer or shallower holes, or a cosmetic thread` };
+    if (all > THREAD_TURNS_TOTAL_MAX) return { ok: false, message: `${f.name} failed: ${spans.length} holes of ${th.designation} are ${Math.ceil(all)} turns in all, more than the ${THREAD_TURNS_TOTAL_MAX} one thread cuts at once (the cut slows with every turn): a shorter Length, fewer or shallower holes, or a cosmetic thread` };
 
     // ---- the grooves, then one cut
     const made: ShapeId[] = [];

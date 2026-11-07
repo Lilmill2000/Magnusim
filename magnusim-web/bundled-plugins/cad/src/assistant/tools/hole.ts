@@ -641,7 +641,7 @@ const holeTool: EditTool<Plan> = {
           : turns > THREAD_TURNS_MAX
             ? `thread: a modelled ${screw.thread} thread ${deep} is up to ${Math.ceil(turns)} turns, more than ${THREAD_TURNS_MAX} a hole: use thread cosmetic, or a hole at most ${len((THREAD_TURNS_MAX + 1) * P)} mm deep`
             : n * turns > THREAD_TURNS_TOTAL_MAX
-              ? `thread: ${n} modelled ${screw.thread} threads ${deep} are up to ${Math.ceil(n * turns)} turns in all, more than the ${THREAD_TURNS_TOTAL_MAX} one thread cuts at once (it would take minutes): use thread cosmetic, fewer holes, or shallower ones`
+              ? `thread: ${n} modelled ${screw.thread} threads ${deep} are up to ${Math.ceil(n * turns)} turns in all, more than the ${THREAD_TURNS_TOTAL_MAX} one thread cuts at once (the cut slows with every turn): use thread cosmetic, fewer holes, or shallower ones`
               : null;
       if (why) throw new ToolError('bad_input', `${why}.`, { detail: { field: 'thread' } });
     }

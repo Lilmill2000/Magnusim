@@ -15,6 +15,7 @@
 //     follow it;
 //   - issue 14 on a 6 mm plate: blind 20 mm says it goes through and leaves out the drill point it
 //     asked for (the reply claims none); with a foot under half the plate, "2 of the 4 holes";
+//     a hole exactly as deep as the plate says it goes through too;
 //   - refused before anything changes, in words: sizes the tables do not have (M7, M8x1, 1/4-21), a
 //     screw head the tables do not have (M2, an inch size), a table countersink at 82 deg, a table
 //     counterbore on a tapped hole, a modelled thread on a clearance hole, counterbores that would
@@ -271,6 +272,10 @@ describe('hole sizes, screw heads, threads and points', () => {
       const four = await cut(h, HOLE({ centers: [CTR('10 mm', '10 mm'), CTR('20 mm', '-10 mm'), CTR('-10 mm', '10 mm'), CTR('-20 mm', '-10 mm')], diameter: '4 mm', depth: 'blind', distance: '10 mm' }));
       expect(four.r.data.warnings).toEqual(['2 of the 4 holes of Hole 2 are at least as deep as Body 1 there, so they go through (10 mm deep)']);
       expect(four.removed).toBeCloseTo(2 * PI * 4 * 10 + 2 * PI * 4 * 6, 3);
+      // Exactly as deep as the plate (6 mm, off the foot): it goes through too, and says so.
+      const flush = await cut(h, HOLE({ centers: [CTR('-25 mm', '15 mm')], diameter: '4 mm', depth: 'blind', distance: '6 mm' }));
+      expect(flush.r.data.warnings).toEqual(['Hole 3 is 6 mm deep, at least as deep as Body 1 there, so it goes through (set depth through, or a smaller distance)']);
+      expect(flush.removed).toBeCloseTo(PI * 4 * 6, 3);
     },
     MS,
   );
