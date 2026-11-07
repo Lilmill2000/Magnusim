@@ -187,7 +187,8 @@ Temperatures in these messages show in the project's unit.
 - On a tetrahedral mesh (Standard) the heat through walls is less accurate: up to about
   14 % high next to a laminar flow (the validation set's laminar pipes; within 0.1 % on
   Hex-dominant), about 20 % low with wall functions (the turbulent pipe; −10 % on
-  Hex-dominant), about 6 % high through a solid's walls, and within 1.5 % in a natural
+  Hex-dominant; with k-omega SST's walls since f7926eb0 the probes read +0.3 % and −1.6 %:
+  "Validation", below), about 6 % high through a solid's walls, and within 1.5 % in a natural
   convection cavity. Through a solid's fixed-temperature face: the
   composite wall below gave 6.35 % more heat on 195 345 tetrahedra (the temperature inside
   the solids was right to 0.45 % of ΔT), and 0.11 % on Hex-dominant hexahedra. Corrected
@@ -305,6 +306,49 @@ after a uniform inlet, where the flow is still developing, and its wall's y+ run
 to 56, so part of the first cells sit in the buffer layer, where wall functions are least
 accurate; a longer pipe, a developed inlet and a mesh with y+ above 30 (or near 1) would
 tell which.
+
+Since that run (probes of 2026-11-06 on OpenFOAM v2606, 8 ranks; not the committed results,
+which are to be run again from one commit):
+
+- **The turbulent pipe's shortfall was k-omega SST's wall treatment.** Heat Transfer's walls
+  are Incompressible Flow's, and since f7926eb0 they take Spalding's law with stepwise omega
+  (the validation set's README, "k-omega SST at the wall"): the pipe's Nu reads -1.61 % on
+  Hex-dominant (y+ 14 to 58) and +0.32 % on Standard (y+ 54 to 166), from -9.6 % and -20.5 %.
+- **The fluid's schemes stay as they are.** Incompressible Flow writes `grad(U)` and the flux
+  skew-corrected since f7926eb0, which took its laminar pipe on Standard from f Re +16 % to
+  +0.2 %. The same lines in Heat Transfer (`grad(U) Gauss skewCorrected linear`, the limiter on
+  `limitedGradU`, `flux((rho*HbyA)) skewCorrected linear`: v2606's buoyant and CHT solvers form
+  phiHbyA from `fvc::flux(rho*HbyA)`), with `grad(h) Gauss skewCorrected linear` as well, were
+  probed on the validation cases' own meshes, the case re-solved with only its fvSchemes changed
+  (re-solved unchanged, the laminar and turbulent pipes on Standard give the app's Nu to four
+  digits; the heat sink, still settling at 3000 iterations, is compared with its own unchanged
+  re-solve (the app's own run of it carried 10.124 W out):
+
+  | Case | As written | Skew-corrected |
+  |---|---|---|
+  | Laminar pipe, fixed wall temperature, Standard (139 200 cells, one layer): Nu / f Re | +13.07 % / +15.1 % | +5.15 % / -1.1 % |
+  | Laminar pipe, fixed wall heat flux, Standard: Nu / f Re | +13.83 % / +15.1 % | +5.63 % / -1.1 % |
+  | Laminar pipes, Hex-dominant (4 layers): Nu, fixed flux / fixed temperature | -0.04 / -0.26 % | -0.30 / -0.58 % (each within its slices' ± 1.5 to 1.8 %) |
+  | Turbulent pipe, Hex-dominant: Nu | -1.61 % | -0.94 % |
+  | Turbulent pipe, Standard (no layers: tetrahedra at the wall, wall functions): Nu / f | +0.32 % / +2.3 % | -39.3 % / +101 % |
+  | de Vahl Davis cavity, Ra = 10⁵, Hex-dominant: Nu-bar / Nu_max | -0.55 / -1.37 % | -0.56 / -1.35 % |
+  | Heat sink in a channel (HT5, Hex-dominant, 3000 iterations): heat carried out / sink T_max | 10.002 W / 359.261 K | 9.901 W / 359.713 K |
+
+  (f from the pressure drop over the slices against Petukhov's 0.0210 at Re 50 000, both from
+  re-solves; the flow is still developing there.) On the laminar pipe the friction is the velocity gradient and the flux (each alone
+  halves its error; Nu moves less than a point), and most of Nu's error is `grad(h)`'s (alone:
+  Nu +5.5 %); what is left is not the gradient scheme (least squares +5.0 %), the energy's
+  convection (central +4.8 %), the face interpolation (+5.2 %) nor the non-orthogonal correction
+  (full: +6.1 %). On the turbulent pipe on Standard every one of the lines reads worse: the flux
+  alone Nu -14 % and f +115 %, `grad(U)` alone -20 % and +60 %, `grad(h)` alone -7.7 % and f
+  unchanged. Incompressible Flow's own turbulent pipe on Standard with its layers turned off
+  (case 2, k-omega SST, Accurate, y+ 41 to 143) reads the same way: f -31 % and f_tau -27 %
+  with the schemes before f7926eb0, -62 % and -65 % with its skew-corrected ones (the flux alone
+  -44 / -42 %, `grad(U)` alone -35 / -42 %). So the skew-corrected lines help where the wall
+  cells are layers and hurt where they are tetrahedra under wall functions (most likely the cell
+  gradients the corrections use, which a wall function's profile across the first cell does not
+  follow; not probed further), and Heat Transfer keeps its schemes until a set of lines reads
+  both right.
 
 ## Proofs (HT4)
 

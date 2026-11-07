@@ -279,8 +279,15 @@ App gaps found so far, and what they block:
   steady and transient Incompressible Flow study writes them at its next Start or Continue;
   "Numerics as written" shows them under Stays fixed
   (`bundled-plugins/incompressible_flow/tests/test_skew_and_walls.py`, `e2e/run-numerics.spec.js`).
-  Heat Transfer's writers keep the plain schemes: its Standard laminar pipes read Nu 13 to 14 %
-  high, likely the same cause (not probed here).
+  Heat Transfer's writers keep the plain schemes. Probed on its own validation meshes
+  (2026-11-06, `bundled-plugins/heat_transfer/README.md`, "Validation"), the same lines with
+  `grad(h)` skew-corrected too took its laminar pipe on Standard from Nu +13.1 % and f Re +15 % to
+  +5.2 % and -1.1 %, but its turbulent pipe on Standard, whose wall cells are tetrahedra under
+  wall functions (no layers), from Nu +0.3 % to -39 % and f +2 % to +101 %. This case's own pipe
+  on Standard with its layers turned off (k-omega SST, Accurate, y+ 41 to 143) reads the same
+  way: f -31 % and f_tau -27 % with the schemes before the fix, -62 % and -65 % with the
+  skew-corrected ones, on one mesh. The default Standard mesh has its layers, but where a wall's
+  layers are off or not applied these lines read a wall-function wall's friction far lower.
 - **k-omega SST at the wall** (case 2), fixed after the first full run: the app wrote
   `nutkWallFunction`, which takes the wall's friction from the first cell's k with a switch to
   the log law at y+ 11.53, and v2606's `omegaWallFunction`, whose default blending is binomial.
