@@ -17416,8 +17416,9 @@ function publishMeshJobState() {
     n_points: ready || running || failed ? (pts != null ? Number(pts) : null) : null,
     counts_source: jobState.counts_source || 'polyMesh',
     meta_bits: bits,
-    // RH2: checkMesh's report on the ready mesh, as its record keeps it (the panel words it).
-    quality: ready && live ? meshQualityOf(live) : null,
+    // RH2: checkMesh's report on the ready mesh, as its record keeps it (the panel words it); and
+    // on a mesh whose generate failed (a failed check fails Hex-dominant's: the line shows which).
+    quality: ready && live ? meshQualityOf(live) : failed && recLive && recLive.status === 'failed' ? meshQualityOf(recLive) : null,
     started_at: !foreign && (mine || running || finishing) && Number.isFinite(startMs) ? startMs : null,
     finished_at: !running && Number.isFinite(endMs) ? endMs : null,
     elapsed_ms: elapsedMs,
@@ -18309,6 +18310,35 @@ function watchJobEvents(jobId) {
 }
 
 /**
+ * A failed generate's checkMesh report, from its mesh's record: Hex-dominant fails a mesh its
+ * checkMesh rule refuses, and the Mesh panel's quality line then shows the mesh's worst cells
+ * under the failure line. The job's end carries only the reason. A few tries: the record is
+ * written as the generator's process closes, which can be just after the end arrives.
+ */
+async function loadFailedMeshQuality(meshId, kick) {
+  if (!meshId) return;
+  const qs = jobMeshQs();
+  for (let i = 0; i < 4; i++) {
+    try {
+      const mj = await (await fetch('/api/mesh' + qs)).json();
+      const own = mj && mj.mesh && String(mj.mesh.id) === String(meshId)
+        ? mj.mesh
+        : ((mj && mj.meshes) || []).find((m) => m && String(m.id) === String(meshId));
+      const live = own && own.live_mesh_result;
+      const same = live && (!kick || !live.generate_id || String(live.generate_id) === String(kick));
+      if (live && live.status === 'failed' && same) {
+        if (live.quality) {
+          updateMeshListEntry(meshId, { live_mesh_result: { quality: live.quality } });
+          try { publishMeshJobState(); } catch (_) {}
+        }
+        return;
+      }
+    } catch (_) {}
+    await new Promise((res) => setTimeout(res, 500));
+  }
+}
+
+/**
  * The watched mesh job's stream says it ended. A failure ends it on the page at once,
  * with the mesher's reason: the job poll may have stopped already, or may not see this
  * job (another study's case attached). Done and stopped get one poll now, which does
@@ -18344,8 +18374,10 @@ function endWatchedMeshJob(status, error, first) {
   if (meshId) {
     updateMeshListEntry(meshId, {
       generated: false,
-      live_mesh_result: { status: 'failed', error: jobState.error || null, mesh_id: meshId },
+      // No quality yet (never the one an earlier generate of this mesh left): its record's, next.
+      live_mesh_result: { status: 'failed', error: jobState.error || null, mesh_id: meshId, quality: null },
     });
+    loadFailedMeshQuality(meshId, jobState.kick_id || jobState.generate_id || null);
   }
   try {
     showJobFinishToast(
@@ -18465,6 +18497,8 @@ function startJobPoll() {
               live_mesh_result: {
                 status: snap.status,
                 error: snap.status === 'failed' ? snap.error || jobState.error || null : null,
+                // A failed mesh's checkMesh report (or none), not an earlier generate's.
+                ...(snap.status === 'failed' ? { quality: snap.quality || null } : {}),
                 case_dir: snap.case_dir,
                 n_cells: snap.n_cells,
                 n_points: snap.n_points,
@@ -18472,6 +18506,9 @@ function startJobPoll() {
                 mesh_id: finishedId,
               },
             });
+            if (snap.status === 'failed' && !snap.quality) {
+              loadFailedMeshQuality(finishedId, snap.kick_id || snap.generate_id || jobState.kick_id || null);
+            }
           }
         }
         if (

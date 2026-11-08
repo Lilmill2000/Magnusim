@@ -207,7 +207,7 @@ export interface MeshJobState {
   counts_source: string;
   /** Engine, layers, hex core, surface size; elapsed is appended by the panel. */
   meta_bits: string[];
-  /** RH2: the ready mesh's quality (checkMesh), null when it is not known (mesh/meshQuality.ts). */
+  /** RH2: the ready mesh's quality (checkMesh), or a failed one's (its check failed Generate); null when it is not known (mesh/meshQuality.ts). */
   quality?: MeshQuality | null;
   started_at: number | null;
   finished_at: number | null;

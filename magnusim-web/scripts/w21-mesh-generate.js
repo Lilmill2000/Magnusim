@@ -9,7 +9,7 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { spawnJob } from './job-runner.js';
-import { meshGeneratorScript } from './test-compute.js';
+import { meshGeneratorArgs, meshGeneratorScript } from './test-compute.js';
 import { killProcessTreeAsync } from './proc-tree.js';
 import { runProbe } from './hardware-profile.js';
 import { projectIdOrActive } from './request-scope.js';
@@ -1423,7 +1423,7 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
     jobId: generateId,
     // Tests (MAGNUSIM_TEST_COMPUTE=fake): a stand-in generator with the same arguments.
     script: meshGeneratorScript(argv[1]),
-    args: argv.slice(2),
+    args: meshGeneratorArgs(argv[1], argv.slice(2)),
     env: { PYTHONUNBUFFERED: '1' },
   });
   const job = bindLiveMeshJob({
@@ -1929,7 +1929,7 @@ function startMeshGenerateBody({ settings, projectId, onUpdate, meshId }) {
     jobId: generateId,
     // Tests (MAGNUSIM_TEST_COMPUTE=fake): a stand-in generator with the same arguments.
     script: meshGeneratorScript(argv[1]),
-    args: argv.slice(2),
+    args: meshGeneratorArgs(argv[1], argv.slice(2)),
     env: { PYTHONUNBUFFERED: '1' },
   });
 
@@ -2083,7 +2083,9 @@ function startMeshGenerateBody({ settings, projectId, onUpdate, meshId }) {
       feature_marks_total: lastResult && lastResult.feature_marks_total != null ? lastResult.feature_marks_total : null,
       regions: lastResult && Array.isArray(lastResult.regions) ? lastResult.regions : null,
       left_out: lastResult && Array.isArray(lastResult.left_out) ? lastResult.left_out : null,
-      quality: status === 'done' && lastResult ? lastResult.quality || null : null,
+      // checkMesh's report: a failed mesh keeps it too (its verdict failed Generate: the Mesh
+      // panel's quality line shows the check, under the failure line that names it).
+      quality: (status === 'done' || status === 'failed') && lastResult ? lastResult.quality || null : null,
       fingerprint_after: null,
       snappy_geometry_rev: lastResult && lastResult.snappy_geometry_rev != null ? lastResult.snappy_geometry_rev : null,
       block_used: lastResult && lastResult.block != null ? lastResult.block : null,

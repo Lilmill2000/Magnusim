@@ -272,7 +272,14 @@ once with a message naming the stylesheet and the error.
   `e2e/mesh-failed-stays-failed.spec.js`;
   `MAGNUSIM_TEST_MESH_CHECKMESH=<checkMesh report>` puts that report in the case and writes
   the mesh's facts and quality as a real mesher does: `e2e/mesh-quality-line.spec.js`, with
-  OpenFOAM's own reports in `python/tests/fixtures/mesh-facts/checkmesh/`; a Hex-dominant
+  OpenFOAM's own reports in `python/tests/fixtures/mesh-facts/checkmesh/`; standing in for
+  Hex-dominant (it is told which generator it stands in for) it then applies that generator's
+  checkMesh verdict, so a report the meshers do not keep ends Generate failed with the failed
+  checks named: `e2e/mesh-hexdominant-checkmesh.spec.js`;
+  `MAGNUSIM_TEST_MESH_PART_BOX=1`: standing in for Hex-dominant it reads the study's part and
+  applies that generator's rule before the run (a part whose background block alone would pass
+  snappyHexMesh's cell limit is refused before it meshes), with Generate's words:
+  `e2e/mesh-hexdominant-long-pipe.spec.js`; a Hex-dominant
   mesh with One cell across (2D) on asks the real rule first, `tools/mesh_two_d.py`, and fails
   with Generate's words on a part it can't mesh so: `e2e/mesh-one-cell-across.spec.js`),
   a Start runs `scripts/test-solve.js` after every check a real Start makes

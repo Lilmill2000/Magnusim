@@ -75,8 +75,13 @@ export function meshQualityOf(live: unknown): MeshQuality | null {
   return { ok: null, n_failed: 0, failed: [], max_non_orthogonality: ortho, max_skewness: skew, max_aspect_ratio: aspect };
 }
 
-/** A number as the line writes it: one decimal below 10, else whole and grouped (1,234). */
+/**
+ * A number as the line writes it: one decimal below 10, else whole and grouped (1,234); above a
+ * million "over 1,000,000" (a cell turned inside out reads an aspect ratio of 4.5e93, which the
+ * line wrote out as 94 digits).
+ */
 function plain(v: number): string {
+  if (Math.abs(v) > 1e6) return 'over 1,000,000';
   return Math.abs(v) < 10 ? v.toFixed(1) : Math.round(v).toLocaleString('en-US');
 }
 

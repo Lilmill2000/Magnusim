@@ -17,10 +17,17 @@ polyMesh back whatever its exit), then ends failed ("Fake mesher failed after wr
 mesh"), exit 44.
 MAGNUSIM_TEST_MESH_CHECKMESH=<file>: a real checkMesh report it puts in the case as
 log.checkMesh; like the real generators it then writes the mesh's facts
-(cfddesk.mesh.facts) and its result carries their quality.
+(cfddesk.mesh.facts) and its result carries their quality. Standing in for Hex-dominant
+(``--stands-for generate_snappy.py``, scripts/test-compute.js) it then applies that generator's
+checkMesh verdict (cfddesk.wsl.mesh_run.checkmesh_failure): a report that fails it ends failed
+with the failed check named, its quality kept, exit 1, as generate_snappy.py does.
 MAGNUSIM_TEST_MESH_MESHER=standard: it leaves the Standard mesher's meta as a mesh with no wall
 layers (standard-meta.json: none asked, none applied), so the facts say a Standard mesh without
 layers (the mesher, and the walls an analysis reads from them).
+MAGNUSIM_TEST_MESH_PART_BOX=1: standing in for Hex-dominant (a 3D mesh) it reads the study's part
+(its STEP's box, as the generator's Body1.stl spans it) and applies that generator's rule before
+the run (F2) at the ``--fineness`` asked: a part whose background block alone would pass
+snappyHexMesh's cell limit fails with the generator's refusal (cell_limit_refusal), exit 1.
 
 With ``--one-cell-across 1`` (Hex-dominant's One cell across, 2D) it first asks the real rule
 (tools/mesh_two_d.py): a part that can't be meshed so fails with Generate's words, as
@@ -119,6 +126,9 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--simulation-id", default="")
     parser.add_argument("--mesh-id", default="")
     parser.add_argument("--one-cell-across", type=int, default=0)
+    parser.add_argument("--fineness", type=int, default=5)
+    # The generator this run stands in for (scripts/test-compute.js meshGeneratorArgs).
+    parser.add_argument("--stands-for", default="")
     args, _rest = parser.parse_known_args(argv)
     case_dir = Path(args.case_dir)
     case_dir.mkdir(parents=True, exist_ok=True)
@@ -135,6 +145,15 @@ def main(argv: list[str]) -> int:
             _event("result", ok=False, error=refusal_words(str(answer.get("reason") or "")))
             return 1
         two_d = answer["two_d"]
+    part_box = os.environ.get("MAGNUSIM_TEST_MESH_PART_BOX", "").strip() == "1"
+    bounds = part_bounds(args) if part_box and args.stands_for == "generate_snappy.py" and two_d is None else None
+    if bounds is not None:
+        from cfddesk.mesh.snappy_hexdominant import cell_limit_refusal
+
+        refusal = cell_limit_refusal(args.fineness, bounds)
+        if refusal:
+            _event("result", ok=False, error=refusal)
+            return 1
     per_stage = _seconds() / len(STAGES)
     for stage in STAGES:
         _event("progress", stage=stage, msg="fake mesher (tests)")
@@ -158,16 +177,42 @@ def main(argv: list[str]) -> int:
     elif os.environ.get("MAGNUSIM_TEST_MESH_MESHER", "").strip() == "standard":
         meta = {"source": "fake mesher", "add_layers": False, "layers_applied": False}
         (case_dir / "standard-meta.json").write_text(json.dumps(meta), encoding="utf-8")
-    quality = mesh_facts(case_dir, os.environ.get("MAGNUSIM_TEST_MESH_CHECKMESH", "").strip())
+    checkmesh = os.environ.get("MAGNUSIM_TEST_MESH_CHECKMESH", "").strip()
+    quality = mesh_facts(case_dir, checkmesh)
+    failed_check = hexdominant_verdict(case_dir) if checkmesh and args.stands_for == "generate_snappy.py" else None
     _event(
         "result",
-        ok=True,
+        ok=failed_check is None,
+        **({"error": failed_check} if failed_check else {}),
         counts_source="fake mesher",
         **counts,
         **({"quality": quality} if quality else {}),
         **({"one_cell_across": True, "two_d": two_d} if two_d is not None else {}),
     )
-    return 0
+    return 0 if failed_check is None else 1
+
+
+def part_bounds(args: argparse.Namespace) -> dict | None:
+    """The study's part's box in metres (its STEP's, as the generator's Body1.stl spans it)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from cfddesk.cad.io import load_cad
+    from cfddesk.cad.preview import shape_bounds
+    from cfddesk.project.paths import resolve_step_for_study
+
+    step = resolve_step_for_study(Path(args.project_dir), args.simulation_id or None, args.mesh_id or None)
+    if step is None:
+        return None
+    box, _ = shape_bounds(load_cad(step).shape)
+    return {k: v / 1000.0 for k, v in box.items()}
+
+
+def hexdominant_verdict(case_dir: Path) -> str | None:
+    """Hex-dominant's checkMesh verdict on the report in the case (generate_snappy.py): why the
+    mesh fails it, None when it passes."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from cfddesk.wsl.mesh_run import checkmesh_failure
+
+    return checkmesh_failure((case_dir / "log.checkMesh").read_text(encoding="utf-8", errors="replace"))
 
 
 def mesh_facts(case_dir: Path, checkmesh: str) -> dict | None:

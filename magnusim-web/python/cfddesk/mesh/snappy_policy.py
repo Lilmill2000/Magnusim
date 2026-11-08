@@ -11,11 +11,15 @@ from dataclasses import asdict, dataclass
 
 from cfddesk.project.mesh_sizing import clamp_fineness
 
-# Bump when emitted castellated/snap geometry controls change (invalidates meshes).
+# Bump when the background block or the castellated/snap geometry controls written change. A
+# marker only: each mesh records it (its record's snappy_geometry_rev, the w23 meta), and nothing
+# marks an older mesh out of date by it (out of date comes from the geometry's revision).
 # rev 1: features = min(3, walls+1) — Fine walls=3 → feature=3 (no edge preference)
 # rev 2: features = min(4, walls+1) — Fine walls=3 → feature=4
 # rev 3: features = max(walls+1, fineness ladder); snapControls scale with fineness
-SNAPPY_GEOMETRY_REV = 3
+# rev 4: a needle's background cells at most 3 times as long as their other sides
+#        (snappy_hexdominant.MAX_BACKGROUND_ASPECT); a flat part's block as before
+SNAPPY_GEOMETRY_REV = 4
 
 # Fineness → minimum explicit feature level (distance = 0 m, single ``level``).
 #   F 1–3 (Coarse)  → 2

@@ -423,12 +423,15 @@ export function twoDAnswer(raw: unknown): Record<string, unknown> {
 export function meshRow(m: Record<string, unknown>, activeId: string): Record<string, unknown> {
   const settings = isRecord(m.settings) ? m.settings : {};
   const live = isRecord(m.live_mesh_result) ? m.live_mesh_result : {};
+  const status = text(m.status ?? (m.generated ? 'done' : 'not generated'), 20);
   return {
     id: text(m.id, 80),
     name: text(m.name ?? settings.name),
     engine: text(isRecord(settings.advanced) ? settings.advanced.mesh_engine : '', 64),
     generated: {
-      status: text(m.status ?? (m.generated ? 'done' : 'not generated'), 20),
+      status,
+      // Its last generate failed: the reason, as the Mesh panel's failure line says it (its first line).
+      ...(status === 'failed' && str(live.error) ? { error: text(str(live.error).split('\n')[0], 400) } : {}),
       cells: num(m.n_cells) ?? num(live.n_cells),
       points: num(m.n_points) ?? num(live.n_points),
       // A mesh made one cell across (2D): its summary in the Mesh panel says so.

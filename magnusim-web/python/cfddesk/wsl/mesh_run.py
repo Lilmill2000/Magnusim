@@ -148,6 +148,62 @@ def _checkmesh_skew_only(stdout: str) -> bool:
     return True
 
 
+# A failed check in the Mesh panel's words (src/panels/mesh/meshQuality.ts failedCheckWords):
+# (one, many) by the check's short name (magnusim_sdk.mesh_facts.parse_checkmesh).
+_CHECK_WORDS: dict[str, tuple[str, str]] = {
+    "skewness": ("highly skewed face", "highly skewed faces"),
+    "aspect_ratio": ("cell with a high aspect ratio", "cells with a high aspect ratio"),
+    "negative_volume": ("cell with a negative volume", "cells with a negative volume"),
+    "non_orthogonality": ("face over 90° non-orthogonal", "faces over 90° non-orthogonal"),
+    "face_pyramids": ("wrongly oriented face", "wrongly oriented faces"),
+    "face_area": ("face with no area", "faces with no area"),
+    "open_cells": ("open cell", "open cells"),
+    "non_aligned_edges": ("edge out of line with the 2D directions", "edges out of line with the 2D directions"),
+    "face_order": ("face out of order", "faces out of order"),
+}
+
+
+def _check_words(failed: dict) -> str:
+    """One failed check in words: "8 cells with a negative volume"."""
+    name = str(failed.get("check") or "")
+    if name == "boundary_openness":
+        return "the boundary is not closed"
+    words = _CHECK_WORDS.get(name)
+    if words is None:
+        return " ".join(str(failed.get("text") or "another check").split())
+    n = failed.get("count")
+    if not isinstance(n, int):
+        return words[1]
+    return f"{n:,} {words[0] if n == 1 else words[1]}"
+
+
+def checkmesh_failure(stdout: str | None) -> str | None:
+    """Why a mesh fails the meshers' checkMesh rule (``_checkmesh_ok`` with skew allowed, as
+    Standard and cfMesh are gated), in the words the person reads; None when it passes.
+
+    A report with no verdict fails too (checkMesh did not finish), as it does for Standard.
+    A failed check is named as the Mesh panel's quality line names it, word for word
+    (meshQuality.ts failedChecksLine, on the at most 8 checks the mesh record keeps:
+    ``magnusim_sdk.mesh_facts.record_quality``), so the panel shows that line once.
+    """
+    text = stdout or ""
+    if _checkmesh_ok(text, allow_skew=True):
+        return None
+    if not text.strip():
+        return "checkMesh left no report on the mesh."
+    from magnusim_sdk.mesh_facts import RECORD_FAILED_MAX, parse_checkmesh
+
+    report = parse_checkmesh(text)
+    if not report.get("known"):
+        return "checkMesh ended without a verdict on the mesh."
+    failed = [f for f in report.get("failed") or [] if isinstance(f, dict)][:RECORD_FAILED_MAX]
+    n = max(int(report.get("n_failed") or 0), len(failed))
+    if not n:
+        return "The mesh did not pass checkMesh."
+    listed = ", ".join(_check_words(f) for f in failed)
+    return f"checkMesh failed {n} check{'' if n == 1 else 's'}{': ' + listed if listed else ''}."
+
+
 def _foam_log_failed(text: str) -> bool:
     """Never trust return code alone — scan for FOAM fatal markers."""
     if not text:

@@ -5,14 +5,16 @@
  * while a mesh generates, is stopped or ends need no OpenFOAM, no WSL and no minutes.
  *
  * - Meshes: python/tools/fake_mesh_generate.py runs in place of the engine's generator,
- *   with the same arguments, through the same live job, compute slot and queue
- *   (MAGNUSIM_TEST_MESH_SECONDS, MAGNUSIM_TEST_MESH_RESULT=fail or fail-with-mesh).
+ *   with the same arguments and the generator it stands in for (`--stands-for`), through
+ *   the same live job, compute slot and queue (MAGNUSIM_TEST_MESH_SECONDS,
+ *   MAGNUSIM_TEST_MESH_RESULT=fail or fail-with-mesh).
  * - The hardware check (Settings > This PC): each probe is a Node process that answers
  *   after MAGNUSIM_TEST_HW_PROBE_MS (default 1500), as a slow WSL does, with a plausible PC.
  * - Solves: test-solve.js, after every check a real Start makes.
  *
  * Unset, everything runs for real.
  */
+import { basename } from 'node:path';
 import { pyTool } from './python-env.js';
 
 /** The switch is on. */
@@ -23,6 +25,16 @@ export function fakeCompute() {
 /** The generator a mesh runs: the stand-in when the switch is on. */
 export function meshGeneratorScript(/** @type {string} */ script) {
   return fakeCompute() ? pyTool('fake_mesh_generate.py') : script;
+}
+
+/**
+ * The generator's arguments; the stand-in first gets the generator it stands in for
+ * (`--stands-for generate_snappy.py`), so it ends as that one does (Hex-dominant's checkMesh verdict).
+ * @param {string} script the real generator
+ * @param {string[]} args
+ */
+export function meshGeneratorArgs(script, args) {
+  return fakeCompute() ? ['--stands-for', basename(script), ...args] : args;
 }
 
 /** @param {string} name @param {number} fallback @param {number} max */

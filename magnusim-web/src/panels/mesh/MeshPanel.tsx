@@ -382,8 +382,10 @@ function MeshStatus({ job }: { job: MeshJobState | null }) {
   else if (finishing) line = 'Writing the mesh into the project…';
   else if (ready) line = `${formatCount(job.n_cells)} cells / ${formatCount(job.n_points)} nodes`;
   const meta = [...(ready ? job.meta_bits : []), ...((ready || failed || stopped) && elapsed ? [elapsed] : [])];
-  // RH2: the ready mesh's worst cells and failed checks (checkMesh), only when they are known.
-  const quality = ready ? meshQualityLines(job.quality ?? null) : [];
+  // RH2: the ready mesh's worst cells and failed checks (checkMesh), only when they are known; and
+  // a failed mesh's, when its check failed Generate (Hex-dominant: the failure line is then its
+  // failed-checks line, shown once).
+  const quality = ready || failed ? meshQualityLines(job.quality ?? null).filter((l) => !failed || l !== line) : [];
   return (
     <div className="mesh-finished" data-mesh-status={job.phase}>
       <div className="mat-k">{title}</div>

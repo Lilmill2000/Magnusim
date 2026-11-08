@@ -337,4 +337,29 @@ EOF
 openfoam2606 blockMesh > log.blockMesh 2>&1
 openfoam2606 checkMesh > log.checkMesh 2>&1
 cp log.checkMesh "$OUT/thin/"
+
+# ---- Case G: 8 thin sheared cells, graded (skewness and 4 cells of high aspect ratio: the two
+# failed checks the meshers keep a mesh with, cfddesk.wsl.mesh_run._checkmesh_ok) ----
+W="$HOME/rh2-fixture-work/thin-sheared"
+rm -rf "$W"
+mkdir -p "$W/system" "$W/constant" "$OUT/thin-sheared"
+cd "$W"
+cp "$HOME/rh2-fixture-work/thin/system/controlDict" "$HOME/rh2-fixture-work/thin/system/fvSchemes" "$HOME/rh2-fixture-work/thin/system/fvSolution" system/
+{ hdr dictionary blockMeshDict; cat <<'EOF'
+convertToMeters 1;
+vertices
+(
+    (0 0 0) (1 0 0) (6 1 0) (5 1 0)
+    (0 0 0.0005) (1 0 0.0005) (6 1 0.0005) (5 1 0.0005)
+);
+blocks ( hex (0 1 2 3 4 5 6 7) (2 4 1) simpleGrading (1 30 1) );
+boundary
+(
+    walls { type wall; faces ((0 1 5 4) (3 7 6 2) (0 4 7 3) (1 2 6 5) (0 3 2 1) (4 5 6 7)); }
+);
+EOF
+} > system/blockMeshDict
+openfoam2606 blockMesh > log.blockMesh 2>&1
+openfoam2606 checkMesh > log.checkMesh 2>&1
+cp log.checkMesh "$OUT/thin-sheared/"
 echo DONE

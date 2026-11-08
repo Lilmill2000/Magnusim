@@ -869,6 +869,24 @@ export function resolveProjectMesh(projectId, meshId, simulationId) {
       fix: { go: 'mesh-hub' },
     };
   }
+  // Its last Generate failed (Daniel's D1: a Hex-dominant mesh that fails checkMesh). Every
+  // mesher copies its polyMesh back whatever its result, so the files alone would pass: no run
+  // starts on it, the Run panel's Start, a queued Start and the Assistant's alike. `final`: a
+  // queued run waiting cannot change it, so it leaves the queue at once with this reason.
+  const lastGen = wanted && wanted.live_mesh_result ? wanted.live_mesh_result : null;
+  if (lastGen && lastGen.status === 'failed') {
+    const name = wanted.name || 'The mesh';
+    const reason = String(lastGen.error || '').split('\n')[0].trim().replace(/[.\s]+$/, '');
+    return {
+      ok: false,
+      error: `${name}'s last Generate failed${reason ? `: ${reason}.` : '.'} Generate it again before using it on a run.`,
+      code: 'mesh_failed',
+      final: true,
+      project_id: id,
+      mesh_id: wanted.id,
+      fix: { go: 'mesh', id: wanted.id, name: wanted.name || 'Mesh' },
+    };
+  }
 
   const case_dir = (wanted && wanted.case_dir) || (wanted && wanted.live_mesh_result && wanted.live_mesh_result.case_dir) || null;
   const stalePath = wanted && wanted.live_mesh_result && wanted.live_mesh_result.mesh_path;

@@ -421,9 +421,10 @@ def test_hex_dominant_with_refinements(tmp_path: Path):
 class _ScriptRun:
     """What ``snappy_hexdominant.sh`` leaves in the case folder (Windows side): it empties the
     folder (``rm -rf "$WIN_OUT"``), then copies back only polyMesh, the Body1 STL, system and the
-    logs. The mesh here is the sphere fixture's, with OpenFOAM's checkMesh report of it."""
+    logs. The mesh here is the sphere fixture's, with OpenFOAM's checkMesh report of it (or
+    ``checkmesh``, another recorded report; None: no report came back)."""
 
-    def __init__(self, case: Path):
+    def __init__(self, case: Path, checkmesh: str | None = "ok-snappy-layers.log"):
         self.case = case
         self.returncode = 0
         facts = FIXTURES / "mesh-facts"
@@ -437,7 +438,8 @@ class _ScriptRun:
         # The elbow's run marks feature cells; the sphere's had no feature edges to mark.
         log += "Marked for refinement due to explicit features    : 12 cells.\n"
         (case / "log.snappyHexMesh").write_text(log, encoding="utf-8")
-        shutil.copy(facts / "checkmesh" / "ok-snappy-layers.log", case / "log.checkMesh")
+        if checkmesh:
+            shutil.copy(facts / "checkmesh" / checkmesh, case / "log.checkMesh")
         (case / "case.foam").touch()
         self.stdout = iter(['MAGNUSIM_EVENT {"event":"result","ok":true,"exit_code":0,"nproc":1,"path_kind":"snappyHexMesh","generate_id":"golden"}\n'])
 

@@ -52,6 +52,10 @@ describe('mesh quality (RH2)', () => {
     expect(worstCellsLine(q)).toBe('Worst cells: 0° non-orthogonal, skewness 13, aspect ratio 8,333');
     expect(failedChecksLine(q)).toBeNull();
     expect(worstCellsLine({ ...q, max_non_orthogonality: null, max_skewness: null, max_aspect_ratio: null })).toBeNull();
+    // Cells turned inside out (the 55 D pipe on Hex-dominant): not 94 digits.
+    expect(worstCellsLine({ ...q, max_non_orthogonality: 179.825, max_skewness: 29.2463, max_aspect_ratio: 4.45313e93 })).toBe(
+      'Worst cells: 180° non-orthogonal, skewness 29, aspect ratio over 1,000,000',
+    );
   });
 
   it('names every failed check checkMesh reports, with its count', () => {

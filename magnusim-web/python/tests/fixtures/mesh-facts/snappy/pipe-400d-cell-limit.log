@@ -1,0 +1,638 @@
+/*---------------------------------------------------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  2606                                  |
+|   \\  /    A nd           | Website:  www.openfoam.com                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+Build  : _481094f-20260618 OPENFOAM=2606 version=2606
+Arch   : "LSB;label=32;scalar=64"
+Exec   : snappyHexMesh -parallel -overwrite
+Date   : Nov 07 2026
+Time   : 14:54:53
+Host   : cfdbox-17
+PID    : 1234
+I/O    : uncollated
+Case   : /home/user/pipe-400d
+nProcs : 8
+Hosts  :
+(
+    (cfdbox-17 8)
+)
+Pstream initialized with:
+    node communication : off [type=host] (8 ranks, 1 nodes)
+    topology controls  : none
+    consensus exchange : 0 (tuning: 0)
+    exchange algorithm : 0
+    commsType          : nonBlocking
+    polling iterations : 0
+trapFpe: Floating point exception trapping enabled (FOAM_SIGFPE).
+memory pool : not available
+fileModificationChecking : Monitoring run-time modified files using timeStampMaster (fileModificationSkew 5, maxFileModificationPolls 20)
+
+--> FOAM Warning : allowSystemOperations : Allowing user-supplied system call operations.
+                   This can be a security risk if running untrusted cases
+                   through e.g. 'coded' on-the-fly-compilation functionality.
+
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+Create time
+
+Create mesh for time = 0
+
+Read mesh in = 0.04 s
+
+Overall mesh bounding box  : (-0.66 -0.00665 -0.00665) (4.66 0.00665 0.00665)
+Relative tolerance         : 1e-06
+Absolute matching distance : 5.32003e-06
+
+Reading refinement surfaces.
+Read refinement surfaces in = 0 s
+
+Reading refinement shells.
+Read refinement shells in = 0 s
+
+Setting refinement level of surface to be consistent with shells.
+For geometry patch_pressure_1.stl detected 0 uncached triangles out of 156
+For geometry patch_velocity_inlet_1.stl detected 0 uncached triangles out of 156
+For geometry patch_walls.stl detected 0 uncached triangles out of 316
+Checked shell refinement in = 0 s
+
+Reading features.
+Read edgeMesh cadFeatures.eMesh
+    points      : 288
+    edges       : 288
+    boundingBox : (0 -0.005 -0.005) (4 0.005 0.005)
+
+Refinement level according to distance to "cadFeatures.eMesh" (288 points, 288 edges).
+    level 4 for all cells within 0 metre.
+Read features in = 0 s
+
+
+Determining initial surface intersections
+-----------------------------------------
+
+Edge intersection testing:
+    Number of edges             : 492896
+    Number of edges to retest   : 0
+    Number of intersected edges : 0
+Edge intersection testing:
+    Number of edges             : 492896
+    Number of edges to retest   : 492896
+    Number of intersected edges : 36208
+Calculated surface intersections in = 0.06 s
+
+Initial mesh : cells:153600  faces:492896  points:187317  unbalance:0.01
+Cells per refinement level:
+    0	153600
+Setting refinement level of surface to be consistent with curvature.
+Checked curvature refinement in = 0 s
+
+
+Adding patches for surface regions
+----------------------------------
+
+Patch Type                Region                        
+----- ----                ------                        
+pressure_1:
+
+1     patch               pressure_1                    
+
+velocity_inlet_1:
+
+2     patch               velocity_inlet_1              
+
+walls:
+
+3     wall                walls                         
+
+Added patches in = 0 s
+
+Edge intersection testing:
+    Number of edges             : 492896
+    Number of edges to retest   : 0
+    Number of intersected edges : 36208
+Decomposition method scotch [8]
+
+Refinement phase
+----------------
+
+Found point (2 0 0) in cell 8516 on processor 6
+
+Feature refinement iteration 0
+------------------------------
+
+Marked for refinement due to explicit features             : 64 cells.
+Determined cells to refine in = 0.04 s
+Selected for feature refinement : 64 cells (out of 153600)
+Edge intersection testing:
+    Number of edges             : 494612
+    Number of edges to retest   : 2852
+    Number of intersected edges : 36492
+Refined mesh in = 0.05 s
+After refinement feature refinement iteration 0 : cells:154048  faces:494612  points:188197  unbalance:0.01371
+Cells per refinement level:
+    0	153536
+    1	512
+Skipping balancing since max unbalance 0.01371 is less than allowable 0.1
+
+Feature refinement iteration 1
+------------------------------
+
+Marked for refinement due to explicit features             : 128 cells.
+Determined cells to refine in = 0.06 s
+Selected for feature refinement : 232 cells (out of 154048)
+Edge intersection testing:
+    Number of edges             : 500528
+    Number of edges to retest   : 8964
+    Number of intersected edges : 36748
+Refined mesh in = 0.04 s
+After refinement feature refinement iteration 1 : cells:155672  faces:500528  points:190985  unbalance:0.0448636
+Cells per refinement level:
+    0	153432
+    1	1216
+    2	1024
+Skipping balancing since max unbalance 0.0448636 is less than allowable 0.1
+
+Feature refinement iteration 2
+------------------------------
+
+Marked for refinement due to explicit features             : 248 cells.
+Determined cells to refine in = 0.06 s
+Selected for feature refinement : 560 cells (out of 155672)
+Edge intersection testing:
+    Number of edges             : 514616
+    Number of edges to retest   : 21940
+    Number of intersected edges : 37864
+Refined mesh in = 0.06 s
+After refinement feature refinement iteration 2 : cells:159592  faces:514616  points:197477  unbalance:0.117449
+Cells per refinement level:
+    0	153328
+    1	1840
+    2	2440
+    3	1984
+Balancing since max unbalance 0.117449 is larger than allowable 0.1
+Balanced mesh in = 0.2 s
+After balancing feature refinement iteration 2 : cells:159592  faces:514616  points:197477  unbalance:0.00997544
+Cells per refinement level:
+    0	153328
+    1	1840
+    2	2440
+    3	1984
+
+Feature refinement iteration 3
+------------------------------
+
+Marked for refinement due to explicit features             : 488 cells.
+Determined cells to refine in = 0.04 s
+Selected for feature refinement : 1056 cells (out of 159592)
+Edge intersection testing:
+    Number of edges             : 541052
+    Number of edges to retest   : 43480
+    Number of intersected edges : 39784
+Refined mesh in = 0.07 s
+After refinement feature refinement iteration 3 : cells:166984  faces:541052  points:209613  unbalance:0.132947
+Cells per refinement level:
+    0	153288
+    1	2048
+    2	2920
+    3	4824
+    4	3904
+Balancing since max unbalance 0.132947 is larger than allowable 0.1
+Balanced mesh in = 0.19 s
+After balancing feature refinement iteration 3 : cells:166984  faces:541052  points:209613  unbalance:0.00996503
+Cells per refinement level:
+    0	153288
+    1	2048
+    2	2920
+    3	4824
+    4	3904
+
+Feature refinement iteration 4
+------------------------------
+
+Marked for refinement due to explicit features             : 0 cells.
+Determined cells to refine in = 0.06 s
+Selected for feature refinement : 0 cells (out of 166984)
+Stopping refining since too few cells selected.
+
+
+Surface refinement iteration 0
+------------------------------
+
+Marked for refinement due to surface intersection          : 54288 cells.
+Determined cells to refine in = 0 s
+Selected for refinement : 54344 cells (out of 166984)
+Edge intersection testing:
+    Number of edges             : 1785332
+    Number of edges to retest   : 1573256
+    Number of intersected edges : 150232
+Refined mesh in = 0.37 s
+After refinement surface refinement iteration 0 : cells:547392  faces:1785332  points:693013  unbalance:0.673316
+Cells per refinement level:
+    0	100384
+    1	424704
+    2	6664
+    3	11736
+    4	3904
+Balancing since max unbalance 0.673316 is larger than allowable 0.1
+Balanced mesh in = 0.58 s
+After balancing surface refinement iteration 0 : cells:547392  faces:1785332  points:693013  unbalance:0.00999649
+Cells per refinement level:
+    0	100384
+    1	424704
+    2	6664
+    3	11736
+    4	3904
+
+Surface refinement iteration 1
+------------------------------
+
+Marked for refinement due to surface intersection          : 204128 cells.
+Determined cells to refine in = 0.02 s
+Selected for refinement : 213928 cells (out of 547392)
+Edge intersection testing:
+    Number of edges             : 6720812
+    Number of edges to retest   : 6303432
+    Number of intersected edges : 586672
+Refined mesh in = 1.59 s
+After refinement surface refinement iteration 1 : cells:2044888  faces:6720812  points:2633381  unbalance:0.244978
+Cells per refinement level:
+    0	90728
+    1	299952
+    2	1620392
+    3	29912
+    4	3904
+Balancing since max unbalance 0.244978 is larger than allowable 0.1
+Balanced mesh in = 2.56 s
+After balancing surface refinement iteration 1 : cells:2044888  faces:6720812  points:2633381  unbalance:0.00989394
+Cells per refinement level:
+    0	90728
+    1	299952
+    2	1620392
+    3	29912
+    4	3904
+
+Surface refinement iteration 2
+------------------------------
+
+Marked for refinement due to surface intersection          : 826624 cells.
+Determined cells to refine in = 0.04 s
+Selected for refinement : 932224 cells (out of 2044888)
+Edge intersection testing:
+    Number of edges             : 28025900
+    Number of edges to retest   : 27445352
+    Number of intersected edges : 2316072
+Refined mesh in = 7.2 s
+After refinement surface refinement iteration 2 : cells:8570456  faces:28025900  points:10887137  unbalance:0.098349
+Cells per refinement level:
+    0	71528
+    1	367152
+    2	1484968
+    3	6642904
+    4	3904
+Skipping balancing since max unbalance 0.098349 is less than allowable 0.1
+
+Surface refinement iteration 3
+------------------------------
+
+No cells marked for refinement since reached limit 4000000.
+Determined cells to refine in = 0.03 s
+Selected for refinement : 0 cells (out of 8570456)
+Stopping refining since too few cells selected.
+
+
+Removing mesh beyond surface intersections
+------------------------------------------
+
+Setting cellZones according to locationsInMesh:
+Location : (2 0 0)
+    cellZone : none
+
+For cellZone none found point (2 0 0) in global region 1 out of 2 regions.
+--> FOAM Warning : 
+    From void Foam::meshRefinement::nearestFace(const Foam::labelUList&, const Foam::bitSet&, Foam::autoPtr<Foam::mapDistribute>&, Foam::labelList&, Foam::label) const
+    in file meshRefinement/meshRefinement.C at line 526
+    Did not visit some faces, e.g. face 0 at (3.5561 -0.00581875 -0.00609583)
+Keeping all cells containing inside points
+Selected for keeping : 6301872 cells.
+Edge intersection testing:
+    Number of edges             : 21217204
+    Number of edges to retest   : 2204720
+    Number of intersected edges : 2316072
+
+Shell refinement iteration 0
+----------------------------
+
+No cells marked for refinement since reached limit 4000000.
+Determined cells to refine in = 6.18 s
+Selected for internal refinement : 232096 cells (out of 6301872)
+Edge intersection testing:
+    Number of edges             : 26052388
+    Number of edges to retest   : 13648516
+    Number of intersected edges : 2318480
+Refined mesh in = 6.68 s
+After refinement shell refinement iteration 0 : cells:7926544  faces:26052388  points:10201375  unbalance:0.113012
+Cells per refinement level:
+    0	9600
+    1	153792
+    2	925824
+    3	6827600
+    4	9728
+Balancing since max unbalance 0.113012 is larger than allowable 0.1
+Balanced mesh in = 11.35 s
+After balancing shell refinement iteration 0 : cells:7926544  faces:26052388  points:10201375  unbalance:0.00783292
+Cells per refinement level:
+    0	9600
+    1	153792
+    2	925824
+    3	6827600
+    4	9728
+
+Shell refinement iteration 1
+----------------------------
+
+No cells marked for refinement since reached limit 4000000.
+Determined cells to refine in = 0.88 s
+Selected for internal refinement : 640 cells (out of 7926544)
+Edge intersection testing:
+    Number of edges             : 26065300
+    Number of edges to retest   : 48304
+    Number of intersected edges : 2318624
+Refined mesh in = 4.66 s
+After refinement shell refinement iteration 1 : cells:7931024  faces:26065300  points:10205197  unbalance:0.00839337
+Cells per refinement level:
+    0	9584
+    1	153920
+    2	925784
+    3	6827336
+    4	14400
+Skipping balancing since max unbalance 0.00839337 is less than allowable 0.1
+
+Shell refinement iteration 2
+----------------------------
+
+No cells marked for refinement since reached limit 4000000.
+Determined cells to refine in = 0.69 s
+Selected for internal refinement : 0 cells (out of 7931024)
+Stopping refining since too few cells selected.
+
+
+Dangling coarse cells refinement iteration 0
+--------------------------------------------
+
+Determined cells to refine in = 0.03 s
+Selected for refinement : 0 cells (out of 7931024)
+Stopping refining since too few cells selected.
+
+
+Dangling coarse cells refinement iteration 0
+--------------------------------------------
+
+Determined cells to refine in = 0.03 s
+Selected for refinement : 0 cells (out of 7931024)
+Stopping refining since too few cells selected.
+
+
+Refinement transition refinement iteration 0
+--------------------------------------------
+
+Determined cells to refine in = 0.07 s
+Selected for refinement : 0 cells (out of 7931024)
+Stopping refining since too few cells selected.
+
+
+Splitting mesh at surface intersections
+---------------------------------------
+
+Introducing baffles for 2318624 faces that are intersected by the surface.
+
+Setting cellZones according to locationsInMesh:
+Location : (2 0 0)
+    cellZone : none
+
+For cellZone none found point (2 0 0) in global region 1 out of 2 regions.
+Edge intersection testing:
+    Number of edges             : 28383924
+    Number of edges to retest   : 14736624
+    Number of intersected edges : 4636952
+Created baffles in = 5.6 s
+
+
+After introducing baffles : cells:7931024  faces:28383924  points:10205197  unbalance:0.00839337
+Cells per refinement level:
+    0	9584
+    1	153920
+    2	925784
+    3	6827336
+    4	14400
+
+Introducing baffles to block off problem cells
+----------------------------------------------
+
+markFacesOnProblemCells : marked 4062753 additional internal faces to be converted into baffles.
+Analyzed problem cells in = 2.14 s
+
+
+Introducing baffles to delete problem cells.
+
+Edge intersection testing:
+    Number of edges             : 32444920
+    Number of edges to retest   : 12460680
+    Number of intersected edges : 4636952
+Created baffles in = 5.07 s
+
+
+After introducing baffles : cells:7931024  faces:32444920  points:10206945  unbalance:0.00839337
+Cells per refinement level:
+    0	9584
+    1	153920
+    2	925784
+    3	6827336
+    4	14400
+Setting cellZones according to locationsInMesh:
+Location : (2 0 0)
+    cellZone : none
+
+For cellZone none found point (2 0 0) in global region 1 out of 2009177 regions.
+Edge intersection testing:
+    Number of edges             : 32444920
+    Number of edges to retest   : 17328628
+    Number of intersected edges : 4636952
+
+Remove unreachable sections of mesh
+-----------------------------------
+
+Keeping all cells containing points 1((2 0 0))
+Selected for keeping : 5222744 cells.
+Edge intersection testing:
+    Number of edges             : 17820088
+    Number of edges to retest   : 0
+    Number of intersected edges : 2318496
+Split mesh in = 12.07 s
+
+
+After subsetting : cells:5222744  faces:17820088  points:7376507  unbalance:0.00814744
+Cells per refinement level:
+    0	9584
+    1	153920
+    2	925784
+    3	4127904
+    4	5552
+
+Introducing zones for interfaces
+--------------------------------
+
+Setting cellZones according to locationsInMesh:
+Location : (2 0 0)
+    cellZone : none
+
+For cellZone none found point (2 0 0) in global region 0 out of 1 regions.
+Setting faceZones according to neighbouring cellZones:
+
+Edge intersection testing:
+    Number of edges             : 17820088
+    Number of edges to retest   : 0
+    Number of intersected edges : 2318496
+
+Handling cells with snap problems
+---------------------------------
+
+Introducing baffles for 2318496 faces that are intersected by the surface.
+
+Setting cellZones according to locationsInMesh:
+Location : (2 0 0)
+    cellZone : none
+
+For cellZone none found point (2 0 0) in global region 0 out of 1 regions.
+Edge intersection testing:
+    Number of edges             : 17820088
+    Number of edges to retest   : 7270332
+    Number of intersected edges : 2318496
+Created baffles in = 5.82 s
+
+
+After introducing baffles : cells:5222744  faces:17820088  points:7376507  unbalance:0.00814744
+Cells per refinement level:
+    0	9584
+    1	153920
+    2	925784
+    3	4127904
+    4	5552
+
+Introducing baffles to block off problem cells
+----------------------------------------------
+
+markFacesOnProblemCells : marked 0 additional internal faces to be converted into baffles.
+Analyzed problem cells in = 1.26 s
+
+
+Introducing baffles to delete problem cells.
+
+Created baffles in = 0.15 s
+
+
+After introducing baffles : cells:5222744  faces:17820088  points:7376507  unbalance:0.00814744
+Cells per refinement level:
+    0	9584
+    1	153920
+    2	925784
+    3	4127904
+    4	5552
+Setting cellZones according to locationsInMesh:
+Location : (2 0 0)
+    cellZone : none
+
+For cellZone none found point (2 0 0) in global region 0 out of 1 regions.
+Edge intersection testing:
+    Number of edges             : 17820088
+    Number of edges to retest   : 7270332
+    Number of intersected edges : 2318496
+
+Remove unreachable sections of mesh
+-----------------------------------
+
+Split mesh in = 3.38 s
+
+
+After subsetting : cells:5222744  faces:17820088  points:7376507  unbalance:0.00814744
+Cells per refinement level:
+    0	9584
+    1	153920
+    2	925784
+    3	4127904
+    4	5552
+
+Merge free-standing baffles
+---------------------------
+
+freeStandingBaffles : detected 0 free-standing baffles out of 0
+
+Detected free-standing baffles : 0
+Merged free-standing baffles in = 0.54 s
+
+
+dupNonManifoldPoints : Found : 0 non-manifold points (out of 7384979)
+Detected unsplittable baffles : 0
+
+Merge refined boundary faces
+----------------------------
+
+Merging 24 sets of faces.
+
+Edge intersection testing:
+    Number of edges             : 17820064
+    Number of edges to retest   : 232
+    Number of intersected edges : 2318472
+
+Undo iteration 0
+----------------
+Checking faces in error :
+    non-orthogonality > 65  degrees                        : 0
+    faces with face pyramid volume < 1e-13                 : 0
+    faces with face-decomposition tet quality < 1e-30      : 0
+    faces with concavity > 80  degrees                     : 0
+    faces with skewness > 4   (internal) or 20  (boundary) : 0
+    faces with interpolation weights (0..1)  < 0.05        : 0
+    faces with volume ratio of neighbour cells < 0.01      : 0
+    faces with face twist < 0.02                           : 0
+    faces on cells with determinant < 0.001                : 0
+
+Merging all points on surface that
+- are used by only two boundary faces and
+- make an angle with a cosine of more than 0.707107.
+
+Removing 120 straight edge points ...
+
+Edge intersection testing:
+    Number of edges             : 17820064
+    Number of edges to retest   : 1356
+    Number of intersected edges : 2318472
+
+Undo iteration 0
+----------------
+Checking faces in error :
+    non-orthogonality > 65  degrees                        : 0
+    faces with face pyramid volume < 1e-13                 : 0
+    faces with face-decomposition tet quality < 1e-30      : 0
+    faces with concavity > 80  degrees                     : 0
+    faces with skewness > 4   (internal) or 20  (boundary) : 0
+    faces with interpolation weights (0..1)  < 0.05        : 0
+    faces with volume ratio of neighbour cells < 0.01      : 0
+    faces with face twist < 0.02                           : 0
+    faces on cells with determinant < 0.001                : 0
+
+Doing final balancing
+---------------------
+
+Found 0 zoned faces to keep together.
+Found 0 separated coupled faces to keep together.
+Refined mesh : cells:5222744  faces:17820064  points:7376387  unbalance:0.00719928
+Cells per refinement level:
+    0	9584
+    1	153920
+    2	925784
+    3	4127904
+    4	5552
+Writing mesh to time constant
+Wrote mesh in = 1.06 s.
+Mesh refined in = 96.51 s.
