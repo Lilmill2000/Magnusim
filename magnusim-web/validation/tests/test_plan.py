@@ -102,18 +102,23 @@ def test_a_hex_dominant_plan_carries_what_its_mesh_will_be(tmp_path: Path):
     p = make_plan(c1, "hexdominant", tmp_path, cores=4)
     est = p["mesh"]["estimate"]
     # The mesher's own block: at least 8 cells across y and 12 across z, whatever the fineness
-    # (the 15 D pipe at fineness 6 is within 3:1: its cells 5.95 mm along, 3.33 mm across y).
+    # (the 15 D pipe at fineness 6 is within 3:1: its cells 5.96 mm along the padded span, 3.33
+    # mm across y). Still 1.79 times as long as wide, so its ends sit just outside the pipe's two
+    # planes (0.339 mm, end_plane_axes): 5.896 mm along, its wall cells (level 2) 1.474 mm.
     assert est["block"] == [67, 8, 12]
     assert est["walls_level"] == 2
-    assert est["wall_cell_mm"] == pytest.approx([1.4887, 0.8312, 0.5542], abs=1e-3)
+    assert est["base_cell_mm"] == pytest.approx([5.8956, 3.325, 2.2167], abs=1e-3)
+    assert est["wall_cell_mm"] == pytest.approx([1.4739, 0.8312, 0.5542], abs=1e-3)
     # An order of magnitude: case 1's real Hex-dominant mesh at fineness 6 had 128 706 cells.
     assert 128_706 <= est["n_cells"] <= 2 * 128_706
     assert est["layers"][0]["stack_over_smallest_cell"] == pytest.approx(1.0 / 0.5542, rel=1e-3)
     assert est["warnings"] == []
     coarse = make_plan(c1, "hexdominant", tmp_path / "c", coarse=True, cores=4)["mesh"]["estimate"]
     # At fineness 4 its 42 cells along (9.5 mm) are within 3 times the 3.33 mm across y: the same
-    # block as before the cap. Its real coarse mesh had 78 243 cells.
+    # counts as before the cap, its ends just outside the pipe's planes (9.409 mm along). Its real
+    # coarse mesh had 78 243 cells.
     assert coarse["block"] == [42, 8, 12] and 78_243 <= coarse["n_cells"] <= 2 * 78_243
+    assert coarse["base_cell_mm"][0] == pytest.approx(9.4088, abs=1e-3)
     # Standard sizes its own mesh: no estimate.
     assert "estimate" not in make_plan(c1, "standard", tmp_path / "s", cores=4)["mesh"]
 

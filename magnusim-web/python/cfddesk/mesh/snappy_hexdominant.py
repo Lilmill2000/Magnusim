@@ -188,27 +188,47 @@ def cell_limit_refusal(fineness: int, bounds_m: dict[str, float] | None, *, two_
     )
 
 
-# The cap leaves a long part's cells along it up to 3 times as long as their side across, and
-# snappyHexMesh can then leave a flat end face square to that axis (a pipe's inlet or outlet)
-# off the part's plane. Where a level's cells cross the plane, the castellated face lands up to
-# half a cell from it, inside the part or outside. The snap's patch smoothing (snapControls
-# nSmoothPatch) then pulls a flat face into the part by 1 - 0.955**n of its cell along the
-# axis (n = 5: 0.21), and a point is snapped only from within the snap tolerance times its
-# longest edge on the face, the short side across. A face that landed inside ended past that
-# reach and stayed where it was: case 2's 30 D pipe at fineness 6, on the 80-cell block the cap
-# gave it, kept its cap's centre 1.26 mm inside the pipe, and the slanted ring round it made its
-# inlet 344 mm² for the disc's 314 (2026-11-08, snappyHexMesh v2606).
-# So along an axis the cap lengthened (``lengthened_axes``) the block keeps its count, but its
-# two ends move and its cells there shrink by under one cell over the part (``aligned_span``):
-# each of the part's two planes on that axis sits this fraction of the finest cell that can
-# reach it inside a background cell (a cell of every level), so the face lands that little
-# outside the part at every level and the smoothing's pull leaves it within reach. Below half
-# a cell, so the cell that holds the plane keeps its centre in the part; 0.46 of the finest
-# cell (0.23 of the wall cell when the features are a level finer than the walls, as at every
-# fineness with physics-based meshing) put case 2's and the 55 D pipe's caps on their planes,
-# 314.00 mm² each (tests/wsl/test_mesh_wsl.py W8, W6). A block the cap leaves alone keeps its
-# corners: its dictionaries are byte for byte what they were.
+# A long part's background cells along it can be up to 3 times as long as their side across
+# (the cap's limit; a part the cap leaves alone can be just under it), and snappyHexMesh can then
+# leave a flat end face square to that axis (a pipe's inlet or outlet) off the part's plane.
+# Where a level's cells cross the plane, the castellated face lands up to half a cell from it,
+# inside the part or outside. The snap's patch smoothing (snapControls nSmoothPatch) then pulls
+# a flat face into the part by 1 - 0.955**n of its cell along the axis (n = 5: 0.21), and a
+# point is snapped only from within the snap tolerance times its longest edge on the face, the
+# longer side across. A face that landed inside ended past that reach and stayed where it was:
+# case 2's 30 D pipe at fineness 6, on the 80-cell block the cap gave it, kept its cap's centre
+# 1.26 mm inside the pipe, and the slanted ring round it made its inlet 344 mm² for the disc's
+# 314 (2026-11-08, snappyHexMesh v2606). The cap is not needed for it: a 20 x 500 mm pipe at
+# fineness 6 with physics-based meshing off (block (67 8 12), which the cap leaves alone, the
+# walls' level 1) kept its inlet's centre 1.87 mm inside and its ends 334.7 mm² (+6.5 %), and a
+# 20 x 300 mm pipe at fineness 4 (42 8 12) points up to 0.63 mm inside and its ends 0.6 % small
+# (2026-11-08, tests/wsl/test_mesh_wsl.py W9).
+# So along such an axis (``end_plane_axes``) the block keeps its count, but its two ends move
+# and its cells there shrink by under one cell over the part (``aligned_span``): each of the
+# part's two planes on that axis sits this fraction of the finest cell that can reach it inside
+# a background cell (a cell of every level), so the face lands that little outside the part at
+# every level and the smoothing's pull leaves it within reach. Below half a cell, so the cell
+# that holds the plane keeps its centre in the part; 0.46 of the finest cell (0.23 of the wall
+# cell when the features are a level finer than the walls, as at every fineness with
+# physics-based meshing) put case 2's and the 55 D pipe's caps on their planes, 314.00 mm² each
+# (tests/wsl/test_mesh_wsl.py W8, W6).
 ALIGN_GAP = 0.46
+# An axis is aligned when a flat face square to it, castellated the most it can be inside the
+# part (half a cell) and pulled in by the smoothing, could end past this share of the snap's
+# reach: when its cells are longer than ALIGN_REACH_SHARE x tolerance / (0.5 + pull) times the
+# longer cell side across, 1.06 at fineness 4 and up (nSmoothPatch 5, tolerance 1) and 1.79 at
+# fineness 1 to 3 (3, 1.5). Not the whole reach: the 55 D pipe's rim chamfered (-0.55 %) with
+# its face's landing at 93 % of it (ce6aa3eb, W6). A block whose cells are about as long as wide
+# (an elbow's, a plate's, a short pipe's, a box round a body) keeps its corners: its
+# dictionaries are byte for byte what they were.
+ALIGN_REACH_SHARE = 0.75
+# What of a flat face's offset the patch smoothing keeps per pass (snapControls nSmoothPatch):
+# it pulled case 2's caps in by 0.2056 of a cell in 5 (1 - 0.955**5).
+PATCH_SMOOTH_KEEP = 0.955
+# An axis of fewer cells is not aligned: ``aligned_span`` needs a cell to spare beyond each end
+# without making its cells longer. A block's long axis has more (at least 12 at fineness 1), and
+# a shorter axis's cells are never long against both other sides.
+MIN_ALIGNED_CELLS = 10
 
 
 def lengthened_axes(fineness: int, bounds_m: dict[str, float] | None) -> list[int]:
@@ -221,8 +241,35 @@ def lengthened_axes(fineness: int, bounds_m: dict[str, float] | None) -> list[in
     return [k for k in range(3) if capped[k] != plain[k]]
 
 
+def end_plane_axes(fineness: int, bounds_m: dict[str, float] | None) -> list[int]:
+    """The axes (0, 1, 2 for x, y, z) whose block ends ``write_hexdominant_dicts`` moves to just
+    outside the part's two planes there (``aligned_span``): each whose background cells are
+    longer than ``ALIGN_REACH_SHARE``'s limit times the longer cell side across, and the axis
+    the aspect cap lengthened (``lengthened_axes``), if it has ``MIN_ALIGNED_CELLS``. At most
+    one: only a block's longest cells can be long against both other sides. A 3D block's (a 2D
+    block is not asked); none without bounds."""
+    f = clamp_fineness(fineness)
+    counts = background_of(f, bounds_m)
+    if counts is None or not bounds_m:
+        return []
+    ext = _extents(bounds_m)
+    sized = [k for k in range(3) if ext[k] > 0.0]
+    if len(sized) < 2:
+        return []
+    side = {k: ext[k] * _PAD / counts[k] for k in sized}
+    snap = snap_controls_for_fineness(f, has_features=True)
+    pull = 1.0 - PATCH_SMOOTH_KEEP ** int(snap.n_smooth_patch)
+    limit = ALIGN_REACH_SHARE * float(snap.tolerance) / (0.5 + pull)
+    capped = set(lengthened_axes(f, bounds_m))
+    return [
+        k
+        for k in sized
+        if counts[k] >= MIN_ALIGNED_CELLS and (k in capped or side[k] > limit * max(side[j] for j in sized if j != k))
+    ]
+
+
 def aligned_span(lo_m: float, hi_m: float, count: int, finest_level: int, pad: float = _PAD) -> tuple[float, float, float]:
-    """A lengthened axis's block ends and its gap (metres) for the part's span ``lo_m`` ..
+    """An aligned axis's (``end_plane_axes``) block ends and its gap (metres) for the part's span ``lo_m`` ..
     ``hi_m``: ``count`` cells as before, a whole number of them over the part and a gap of
     ``ALIGN_GAP`` cells of ``finest_level`` at each end, the rest split either side (one more
     on the high side when they do not halve). Its cells are never longer than the padded
@@ -541,7 +588,7 @@ def write_hexdominant_dicts(
 ) -> dict[str, Any]:
     """Write blockMeshDict / snappyHexMeshDict / surfaceFeatureExtractDict on host.
 
-    ``aligned_axes`` (``lengthened_axes``, 3D only): along each, the block's ends move so the
+    ``aligned_axes`` (``end_plane_axes``, 3D only): along each, the block's ends move so the
     part's two planes there sit just inside a background cell (``aligned_span``, its finest
     level the finest the dictionaries refine to); the block keeps its counts.
 

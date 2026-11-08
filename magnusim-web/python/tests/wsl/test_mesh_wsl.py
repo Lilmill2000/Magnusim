@@ -33,6 +33,13 @@ These run the same command lines to the end (``pytest -m wsl``, minutes each):
   inside the pipe, and the slanted ring round each made them 344.3 mm² for 314.16 (+9.6 %,
   the extra flow of a Normal to face inlet; 2026-11-08). With the block's ends just outside
   the pipe's two planes (``snappy_hexdominant.aligned_span``) it is the part's shape, as W6.
+- W9 Hex-dominant on pipes whose block the cap leaves alone but whose cells are still long
+  against their side across: the 20 mm pipe 500 mm long (25 D) at fineness 6 with
+  physics-based meshing off (67 8 12, the walls' level 1) kept its inlet's centre 1.87 mm
+  inside the pipe and its ends 334.7 mm² for 314.16 (+6.5 %), and case 1's 300 mm pipe at
+  fineness 4 (42 8 12) points up to 0.63 mm inside and its ends 0.6 % small (6c515bc6, which
+  aligned only the cap's axis; 2026-11-08). With every such axis aligned
+  (``snappy_hexdominant.end_plane_axes``) both are the part's shape, as W6.
 
 Each run has its own WSL case id and removes it when done. Record the cell
 counts after a deliberate change with ``CFDDESK_UPDATE_GOLDEN=1``. snappyHexMesh runs on
@@ -333,9 +340,10 @@ def _pipe_shape(case: Path, *, l_mm: float) -> dict[str, Any]:
     return {"patches": patches, "sections": sections}
 
 
-def _assert_pipe_shape(shape: dict[str, Any], cad: dict[str, float], *, l_mm: float) -> None:
+def _assert_pipe_shape(shape: dict[str, Any], cad: dict[str, float], *, l_mm: float, section_rel: float = 0.005) -> None:
     """The pipe's mesh is the part's shape: its inlet and outlet flat on their planes (every point
-    within 0.05 mm), and they, the wall and the cross-section within 0.5 % of the CAD faces."""
+    within 0.05 mm), and they, the wall and the cross-section within 0.5 % of the CAD faces (the
+    cross-section within ``section_rel``)."""
     got = shape["patches"]
     for name, patch, plane in (("inlet", "velocity_inlet_1", 0.0), ("outlet", "pressure_1", l_mm)):
         span = got[patch]["x_mm"]
@@ -343,12 +351,15 @@ def _assert_pipe_shape(shape: dict[str, Any], cad: dict[str, float], *, l_mm: fl
         assert abs(got[patch]["area_mm2"] / cad[name] - 1.0) <= 0.005, (name, got[patch]["area_mm2"], cad[name], shape)
     assert abs(got["walls"]["area_mm2"] / cad["wall"] - 1.0) <= 0.005, (got["walls"]["area_mm2"], cad["wall"])
     for frac, area in shape["sections"].items():
-        assert abs(area / cad["inlet"] - 1.0) <= 0.005, (frac, area, cad["inlet"], shape)
+        assert abs(area / cad["inlet"] - 1.0) <= section_rel, (frac, area, cad["inlet"], shape)
 
 
-def _hex_dominant_pipe(tmp: Path, tag: str, *, l_mm: float) -> tuple[int, dict[str, Any], str, Path]:
-    """A 20 mm pipe ``l_mm`` long meshed by Hex-dominant at fineness 6, no layers: the
-    generator's exit code, its result, the end of its stderr and the case folder."""
+def _hex_dominant_pipe(
+    tmp: Path, tag: str, *, l_mm: float, fineness: int = 6, physics: bool = True
+) -> tuple[int, dict[str, Any], str, Path]:
+    """A 20 mm pipe ``l_mm`` long meshed by Hex-dominant at ``fineness`` (physics-based meshing
+    ``physics``), no layers: the generator's exit code, its result, the end of its stderr and the
+    case folder."""
     proj, mesh = _pipe_project(tmp, d_mm=20.0, l_mm=l_mm)
     case = mesh / "case"
     wsl_case = _case_id(tag)
@@ -357,7 +368,8 @@ def _hex_dominant_pipe(tmp: Path, tag: str, *, l_mm: float) -> tuple[int, dict[s
             [
                 str(TOOLS / "generate_snappy.py"),
                 "--project-dir", str(proj), "--case-dir", str(case), "--wsl-case", wsl_case,
-                "--generate-id", "golden", "--fineness", "6", "--add-layers", "0",
+                "--generate-id", "golden", "--fineness", str(int(fineness)), "--add-layers", "0",
+                "--physics-based", "1" if physics else "0",
                 "--mesh-id", "mesh_1", "--simulation-id", "sim_1",
             ]
         )
@@ -402,6 +414,29 @@ def test_w8_hex_dominant_case_2_pipe(tmp_path: Path):
     shape = _pipe_shape(case, l_mm=600.0)
     print(f"[w8] {res['n_cells']} cells, {json.dumps(shape)}")
     _assert_pipe_shape(shape, _cad_areas(tmp_path, 600.0), l_mm=600.0)
+
+
+@pytest.mark.parametrize(
+    ("l_mm", "fineness", "physics", "block", "section_rel"),
+    [
+        # Its walls' level 1 (physics-based meshing off): the 20 mm circle in cells 1.66 mm across
+        # leaves the pipe's cross-section 0.53 % under the disc's, the inlet's and outlet's discs
+        # (snapped on their planes) 0.05 %.
+        (500.0, 6, False, "(67 8 12)", 0.01),
+        (300.0, 4, True, "(42 8 12)", 0.005),
+    ],
+    ids=["25 D, physics-based off", "15 D at fineness 4"],
+)
+def test_w9_hex_dominant_pipe_of_long_cells_the_cap_leaves_alone(
+    tmp_path: Path, l_mm: float, fineness: int, physics: bool, block: str, section_rel: float
+):
+    rc, res, err, case = _hex_dominant_pipe(tmp_path, "w9", l_mm=l_mm, fineness=fineness, physics=physics)
+    # The block as before: the cap leaves it alone.
+    assert res["block"] == block, res
+    _assert_passes_checkmesh(rc, res, err, case)
+    shape = _pipe_shape(case, l_mm=l_mm)
+    print(f"[w9] {l_mm:g} mm at fineness {fineness}: {res['n_cells']} cells, {json.dumps(shape)}")
+    _assert_pipe_shape(shape, _cad_areas(tmp_path, l_mm), l_mm=l_mm, section_rel=section_rel)
 
 
 def _box_project(tmp: Path, *, x_mm: float, y_mm: float, z_mm: float) -> tuple[Path, Path]:

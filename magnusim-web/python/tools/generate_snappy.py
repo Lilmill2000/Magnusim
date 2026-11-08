@@ -28,8 +28,8 @@ from cfddesk.mesh.generate_guard import claim_generate_case, release_generate_ca
 from cfddesk.mesh.snappy_hexdominant import (  # noqa: E402
     base_cell_size,
     cell_limit_refusal,
+    end_plane_axes,
     fineness_params,
-    lengthened_axes,
     read_feature_marks,
     read_polymesh_counts,
     scale_body1_stl,
@@ -550,9 +550,10 @@ def main() -> int:
             locations=prep.get("locations"),
             interfaces=prep.get("interfaces"),
             two_d=prep.get("two_d"),
-            # A needle's long axis (the aspect cap lengthened it): its end planes just inside a
-            # background cell, so a flat end face there snaps onto its plane.
-            aligned_axes=() if prep.get("two_d") else lengthened_axes(int(args.fineness), bounds),
+            # An axis whose cells are long against their side across (a pipe's, and a needle's
+            # the aspect cap lengthened): its end planes just inside a background cell, so a
+            # flat end face there snaps onto its plane.
+            aligned_axes=() if prep.get("two_d") else end_plane_axes(int(args.fineness), bounds),
         )
         # One cell across: the background the dictionaries were written with (two_d.background).
         params["block"] = meta["block"]

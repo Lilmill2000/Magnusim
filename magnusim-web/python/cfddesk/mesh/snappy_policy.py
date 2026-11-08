@@ -21,7 +21,10 @@ from cfddesk.project.mesh_sizing import clamp_fineness
 #        (snappy_hexdominant.MAX_BACKGROUND_ASPECT); a flat part's block as before
 # rev 5: along an axis the cap lengthened, the block's ends just outside the part's two planes
 #        there (snappy_hexdominant.aligned_span); its counts and every other block as before
-SNAPPY_GEOMETRY_REV = 5
+# rev 6: the same along any axis whose cells are long against their side across, as a pipe's
+#        the cap leaves alone (snappy_hexdominant.end_plane_axes); a block of cells about as
+#        long as wide as before
+SNAPPY_GEOMETRY_REV = 6
 
 # Fineness → minimum explicit feature level (distance = 0 m, single ``level``).
 #   F 1–3 (Coarse)  → 2

@@ -25,6 +25,13 @@
 //   1 m/s; ce6aa3eb read 0.344 L/s), and the run's monitors give the inlet's flow and its mesh
 //   area within 0.5 % of the face's. Only a real mesh shows this: the fake mesher (the default
 //   suite's) runs no snappyHexMesh, so no default-suite test can see the cap.
+// - With WSL: a 25 D pipe (20 mm across, 500 mm long) at fineness 6 with Physics-based meshing
+//   off. The cap leaves its block alone (67 8 12), but its cells are still 3 times as long as
+//   their side across, and on 6c515bc6 (which moved only the cap's axis) its inlet's centre
+//   stayed 1.87 mm inside the pipe and each end came out 334.7 mm² for the disc's 314.2 (+6.5 %;
+//   python/tests/wsl/test_mesh_wsl.py W9), and the Inlet card read Flow rate 0.332 L/s in. Now
+//   every axis whose cells are long against their side across gets its ends just outside the
+//   part's planes: the card reads 0.314 L/s in, as for case 2's pipe.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { mkdirSync, readFileSync } from 'node:fs';
 import { delimiter, dirname, join } from 'node:path';
@@ -40,8 +47,9 @@ const WEB = join(HERE, '..');
 // Pipes along +x from x = 0: 20 mm across and 1,100 mm long (55 D); 1 mm across and 20 m long.
 const PIPE_55D = { file: 'pipe-55d.step', length: 1100 };
 const PIPE_20000D = { file: 'pipe-20000d.step', length: 20000 };
-// Validation case 2's pipe: 20 mm across and 600 mm long (30 D).
+// Validation case 2's pipe: 20 mm across and 600 mm long (30 D); one 500 mm long (25 D).
 const PIPE_30D = { file: 'pipe-30d.step', length: 600 };
+const PIPE_25D = { file: 'pipe-25d.step', length: 500 };
 const WSL = (process.env.MAGNUSIM_E2E_WSL || process.env.CFDDESK_E2E_WSL) === '1';
 const STEP = { timeout: 30_000 };
 const stamp = () => Date.now().toString(36);
@@ -70,9 +78,10 @@ async function postOk(request, url, data) {
 /**
  * A pipe in a project of its own: an Incompressible Flow study (laminar), its inlet the disc at
  * x = 0 (`inlet` m/s, normal to the face), its outlet the disc at the far end, its side a wall
- * (named `wall`); its mesh Hex-dominant at `fineness`, no boundary layers.
+ * (named `wall`); its mesh Hex-dominant at `fineness`, Physics-based meshing `physics`, no
+ * boundary layers.
  */
-async function pipeStudy(request, base, pipe, { title, fineness, inlet: speed = 0.1, wall = 'Wall' }) {
+async function pipeStudy(request, base, pipe, { title, fineness, inlet: speed = 0.1, wall = 'Wall', physics = true }) {
   const made = await postOk(request, `${base}/api/project`, { title: `${title} ${stamp()}`, description: '', category: 'Other', units: 'Metric', folder: 'My Projects' });
   const pid = String(made.id || made.project?.id);
   const q = (path, extra = {}) => `${base}${path}?${new URLSearchParams({ project_id: pid, ...extra })}`;
@@ -117,7 +126,7 @@ async function pipeStudy(request, base, pipe, { title, fineness, inlet: speed = 
     mesh_id: mid,
     fineness,
     automatic_boundary_layers: false,
-    physics_based_meshing: true,
+    physics_based_meshing: physics,
     advanced: { mesh_engine: 'snappy_hexdominant' },
   });
   return { pid, sid, gid, mid, q, inletArea: Number(inlet[0].area) };
@@ -247,12 +256,14 @@ test('WSL: a 55 D pipe at fineness 6 on Hex-dominant ends Mesh ready with no fai
   await expectReady(form);
 });
 
-test("WSL: case 2's 30 D pipe on Hex-dominant lets in what its inlet face's area does: the Inlet card reads Flow rate 0.314 L/s at 1 m/s", async ({ page, request }) => {
-  test.skip(!WSL, NO_WSL);
-  test.setTimeout(1_800_000);
-  page.setDefaultTimeout(60_000);
-  // Its wall's patch "walls": the core suite's test plugin puts a monitor on that patch in every solve.
-  const s = await pipeStudy(request, '', PIPE_30D, { title: 'Pipe 30 D WSL', fineness: 6, inlet: 1, wall: 'Walls' });
+/**
+ * A pipe study's (`pipeStudy`, its inlet 1 m/s) Hex-dominant mesh generated from the Mesh panel,
+ * done with `block` and checkMesh passed, and a short run: what the person reads on the run's
+ * Monitors panel, the Inlet card's Flow rate the disc's area times 1 m/s (0.314 L/s), then the
+ * run's monitors, the inlet's flow and its mesh area within 0.5 % of the face's. `tag` names it
+ * in the log.
+ */
+async function expectInletFlowOfItsFace(page, request, s, { block, tag }) {
   // The disc's area (mm²) from the CAD face, and what 1 m/s through it is (m³/s).
   const area = s.inletArea > 0 ? s.inletArea : Math.PI * 100;
   expect(area).toBeCloseTo(Math.PI * 100, 2);
@@ -262,8 +273,7 @@ test("WSL: case 2's 30 D pipe on Hex-dominant lets in what its inlet face's area
   await expect(form.locator('[data-mesh-status]')).toHaveAttribute('data-mesh-status', /ready|failed/, { timeout: 1_200_000 });
   const live = await liveOf(request, s);
   expect(live.status, JSON.stringify(live.error || '')).toBe('done');
-  // The cap's block (67 cells along before it), and checkMesh passed it.
-  expect(live.block_used).toBe('(80 8 12)');
+  expect(live.block_used).toBe(block);
   expect(live.quality).toMatchObject({ known: true, ok: true, n_failed: 0 });
 
   // A short run on 8 cores: the inlet's flow is set by its velocity from the first iteration.
@@ -277,18 +287,6 @@ test("WSL: case 2's 30 D pipe on Hex-dominant lets in what its inlet face's area
     .toMatch(/^(done|failed|stopped)$/);
   const ended = (await json(request, `/api/run/status?${runQ}`)).run || {};
   expect(ended.status, String(ended.error || ended.log_excerpt || '').slice(-1500)).toBe('done');
-
-  // The run's monitors: the inlet's flow and its mesh area within 0.5 % of the face's (ce6aa3eb:
-  // 9.6 % over both).
-  const doc = await json(request, `/api/run/monitors?${runQ}`);
-  const rows = ['monitors', 'custom', 'patches', 'rows'].flatMap((k) => (Array.isArray(doc[k]) ? doc[k] : []));
-  const inletRow = rows.find((m) => m.name === 'Inlet');
-  expect(inletRow, JSON.stringify(rows.map((m) => [m.key, m.name, m.patch]))).toBeTruthy();
-  const points = ['series', 'points', 'rows', 'values'].map((k) => inletRow[k]).find((v) => Array.isArray(v) && v.length) || [inletRow.last];
-  const q = Math.abs(Number(points.at(-1)?.Q_m3s));
-  console.log(`[hex long pipe wsl] 30 D: ${live.n_cells} cells; inlet flow ${q} m³/s for ${flow}, its mesh area ${Number(inletRow.area_m2) * 1e6} mm² for ${area}`);
-  expect(Math.abs(q / flow - 1)).toBeLessThan(0.005);
-  expect(Math.abs((Number(inletRow.area_m2) * 1e6) / area - 1)).toBeLessThan(0.005);
 
   // What the person sees: the run's Monitors panel from the tree, the Inlet card's Details.
   await page.goto(`/#/p/${encodeURIComponent(s.pid)}`);
@@ -306,6 +304,39 @@ test("WSL: case 2's 30 D pipe on Hex-dominant lets in what its inlet face's area
   await expect(card).toHaveCount(1, STEP);
   await card.locator('details.mon-more > summary').click();
   const flowRow = card.locator('.mon-grid .mon-k', { hasText: /^Flow rate$/ });
-  // 1 m/s through the 314.16 mm² face: 0.314 L/s, as the panel writes it (ce6aa3eb: 0.344 L/s).
-  await expect(flowRow.locator('xpath=following-sibling::span[1]')).toHaveText(`${(flow * 1000).toFixed(3)} L/s in`, STEP);
+  const flowText = flowRow.locator('xpath=following-sibling::span[1]');
+  await expect(flowText).toHaveText(/ L\/s /, STEP);
+  console.log(`[hex long pipe wsl] ${tag}: the Inlet card reads Flow rate ${await flowText.textContent()}`);
+  // 1 m/s through the 314.16 mm² face: 0.314 L/s, as the panel writes it.
+  await expect(flowText).toHaveText(`${(flow * 1000).toFixed(3)} L/s in`, STEP);
+
+  // The run's monitors: the inlet's flow and its mesh area within 0.5 % of the face's.
+  const doc = await json(request, `/api/run/monitors?${runQ}`);
+  const rows = ['monitors', 'custom', 'patches', 'rows'].flatMap((k) => (Array.isArray(doc[k]) ? doc[k] : []));
+  const inletRow = rows.find((m) => m.name === 'Inlet');
+  expect(inletRow, JSON.stringify(rows.map((m) => [m.key, m.name, m.patch]))).toBeTruthy();
+  const points = ['series', 'points', 'rows', 'values'].map((k) => inletRow[k]).find((v) => Array.isArray(v) && v.length) || [inletRow.last];
+  const q = Math.abs(Number(points.at(-1)?.Q_m3s));
+  console.log(`[hex long pipe wsl] ${tag}: ${live.n_cells} cells; inlet flow ${q} m³/s for ${flow}, its mesh area ${Number(inletRow.area_m2) * 1e6} mm² for ${area}`);
+  expect(Math.abs(q / flow - 1)).toBeLessThan(0.005);
+  expect(Math.abs((Number(inletRow.area_m2) * 1e6) / area - 1)).toBeLessThan(0.005);
+}
+
+test("WSL: case 2's 30 D pipe on Hex-dominant lets in what its inlet face's area does: the Inlet card reads Flow rate 0.314 L/s at 1 m/s", async ({ page, request }) => {
+  test.skip(!WSL, NO_WSL);
+  test.setTimeout(1_800_000);
+  page.setDefaultTimeout(60_000);
+  // Its wall's patch "walls": the core suite's test plugin puts a monitor on that patch in every solve.
+  const s = await pipeStudy(request, '', PIPE_30D, { title: 'Pipe 30 D WSL', fineness: 6, inlet: 1, wall: 'Walls' });
+  // The cap's block (67 cells along before it); ce6aa3eb let in 9.6 % more (0.344 L/s).
+  await expectInletFlowOfItsFace(page, request, s, { block: '(80 8 12)', tag: '30 D' });
+});
+
+test("WSL: a 25 D pipe on Hex-dominant with Physics-based meshing off lets in what its inlet face's area does: the Inlet card reads Flow rate 0.314 L/s at 1 m/s", async ({ page, request }) => {
+  test.skip(!WSL, NO_WSL);
+  test.setTimeout(1_800_000);
+  page.setDefaultTimeout(60_000);
+  const s = await pipeStudy(request, '', PIPE_25D, { title: 'Pipe 25 D WSL', fineness: 6, inlet: 1, wall: 'Walls', physics: false });
+  // The block the cap leaves alone; on 6c515bc6 the card read 0.332 L/s.
+  await expectInletFlowOfItsFace(page, request, s, { block: '(67 8 12)', tag: '25 D, physics-based off' });
 });

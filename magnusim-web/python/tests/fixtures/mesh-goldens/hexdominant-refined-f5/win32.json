@@ -106,7 +106,7 @@
    "  \"n_solve_iter\": 150,",
    "  \"tolerance\": 1.0",
    " },",
-   " \"snappy_geometry_rev\": 5,",
+   " \"snappy_geometry_rev\": 6,",
    " \"walls_level\": 2",
    "}"
   ]
