@@ -29,6 +29,7 @@ from cfddesk.mesh.snappy_hexdominant import (  # noqa: E402
     base_cell_size,
     cell_limit_refusal,
     fineness_params,
+    lengthened_axes,
     read_feature_marks,
     read_polymesh_counts,
     scale_body1_stl,
@@ -48,6 +49,12 @@ PATH_KIND = "snappyHexMesh"
 # Test hook (inert unless set; read once): prepare_input waits while this file exists,
 # so a test can see the stage in the mesh panel. e2e/link-mesh-input.spec.js.
 _PREPARE_PAUSE = os.environ.get("MAGNUSIM_TEST_PREPARE_INPUT_PAUSE", "").strip()
+
+# Test hook (inert unless set): the most ranks snappyHexMesh may take, so a WSL test or a
+# validation probe on a PC whose WSL other work shares meshes on no more than that. Unset, the
+# script takes every physical core, as the app does, and renders as it always has.
+_RANKS_HOOK = "MAGNUSIM_TEST_MESH_RANKS"
+_NPROC_FLOOR = 'if [ "$NPROC" -lt 1 ]; then\n  NPROC=1\nfi\n'
 
 
 def _progress(stage: str, **extra) -> None:
@@ -139,7 +146,13 @@ def render_snappy_script(*, dst: str, win_out: str, generate_id: str) -> str:
         .replace("__WIN_OUT__", str(win_out))
         .replace("__GENERATE_ID__", str(generate_id))
     )
-    return text.replace("\r\n", "\n").replace("\r", "\n")
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    cap = os.environ.get(_RANKS_HOOK, "").strip()
+    if cap:
+        if not cap.isdigit() or int(cap) < 1 or text.count(_NPROC_FLOOR) != 1:
+            raise RuntimeError(f"{_RANKS_HOOK}={cap!r}: not a rank count, or the script has no rank line to cap")
+        text = text.replace(_NPROC_FLOOR, _NPROC_FLOOR + f'if [ "$NPROC" -gt {int(cap)} ]; then\n  NPROC={int(cap)}\nfi\n')
+    return text
 
 
 def _region_locations(solid, regions, scale: float) -> list[tuple[tuple[float, float, float], str]]:
@@ -537,6 +550,9 @@ def main() -> int:
             locations=prep.get("locations"),
             interfaces=prep.get("interfaces"),
             two_d=prep.get("two_d"),
+            # A needle's long axis (the aspect cap lengthened it): its end planes just inside a
+            # background cell, so a flat end face there snaps onto its plane.
+            aligned_axes=() if prep.get("two_d") else lengthened_axes(int(args.fineness), bounds),
         )
         # One cell across: the background the dictionaries were written with (two_d.background).
         params["block"] = meta["block"]

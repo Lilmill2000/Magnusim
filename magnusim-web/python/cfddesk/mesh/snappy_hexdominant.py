@@ -188,6 +188,57 @@ def cell_limit_refusal(fineness: int, bounds_m: dict[str, float] | None, *, two_
     )
 
 
+# The cap leaves a long part's cells along it up to 3 times as long as their side across, and
+# snappyHexMesh can then leave a flat end face square to that axis (a pipe's inlet or outlet)
+# off the part's plane. Where a level's cells cross the plane, the castellated face lands up to
+# half a cell from it, inside the part or outside. The snap's patch smoothing (snapControls
+# nSmoothPatch) then pulls a flat face into the part by 1 - 0.955**n of its cell along the
+# axis (n = 5: 0.21), and a point is snapped only from within the snap tolerance times its
+# longest edge on the face, the short side across. A face that landed inside ended past that
+# reach and stayed where it was: case 2's 30 D pipe at fineness 6, on the 80-cell block the cap
+# gave it, kept its cap's centre 1.26 mm inside the pipe, and the slanted ring round it made its
+# inlet 344 mm² for the disc's 314 (2026-11-08, snappyHexMesh v2606).
+# So along an axis the cap lengthened (``lengthened_axes``) the block keeps its count, but its
+# two ends move and its cells there shrink by under one cell over the part (``aligned_span``):
+# each of the part's two planes on that axis sits this fraction of the finest cell that can
+# reach it inside a background cell (a cell of every level), so the face lands that little
+# outside the part at every level and the smoothing's pull leaves it within reach. Below half
+# a cell, so the cell that holds the plane keeps its centre in the part; 0.46 of the finest
+# cell (0.23 of the wall cell when the features are a level finer than the walls, as at every
+# fineness with physics-based meshing) put case 2's and the 55 D pipe's caps on their planes,
+# 314.00 mm² each (tests/wsl/test_mesh_wsl.py W8, W6). A block the cap leaves alone keeps its
+# corners: its dictionaries are byte for byte what they were.
+ALIGN_GAP = 0.46
+
+
+def lengthened_axes(fineness: int, bounds_m: dict[str, float] | None) -> list[int]:
+    """The axes (0, 1, 2 for x, y, z) whose background cells the aspect cap made more of: a
+    needle's long axis, or none (a block the cap leaves alone; a 2D block is not asked)."""
+    capped = background_of(fineness, bounds_m)
+    plain = background_of(fineness, bounds_m, aspect_cap=False)
+    if capped is None or plain is None:
+        return []
+    return [k for k in range(3) if capped[k] != plain[k]]
+
+
+def aligned_span(lo_m: float, hi_m: float, count: int, finest_level: int, pad: float = _PAD) -> tuple[float, float, float]:
+    """A lengthened axis's block ends and its gap (metres) for the part's span ``lo_m`` ..
+    ``hi_m``: ``count`` cells as before, a whole number of them over the part and a gap of
+    ``ALIGN_GAP`` cells of ``finest_level`` at each end, the rest split either side (one more
+    on the high side when they do not halve). Its cells are never longer than the padded
+    span's (``pad``) were, so the cap's 3 to 1 still holds, and at most one cell over the part
+    shorter."""
+    length = float(hi_m) - float(lo_m)
+    n = int(count)
+    cell = length * float(pad) / n
+    gaps = 2.0 * ALIGN_GAP / 2 ** int(finest_level)
+    inner = max(1, min(n - 2, math.ceil(length / cell + gaps - 1e-9)))
+    h = length / (inner - gaps)
+    gap = ALIGN_GAP * h / 2 ** int(finest_level)
+    start = float(lo_m) - gap - ((n - inner) // 2) * h
+    return start, start + n * h, gap
+
+
 def block_from_fineness(fineness: int, bounds_m: dict[str, float] | None) -> str:
     f = clamp_fineness(fineness)
     counts = background_of(f, bounds_m)
@@ -486,8 +537,13 @@ def write_hexdominant_dicts(
     locations: list[tuple[tuple[float, float, float], str]] | None = None,
     interfaces: list[dict[str, str]] | None = None,
     two_d: dict[str, Any] | None = None,
+    aligned_axes: list[int] | tuple[int, ...] = (),
 ) -> dict[str, Any]:
     """Write blockMeshDict / snappyHexMeshDict / surfaceFeatureExtractDict on host.
+
+    ``aligned_axes`` (``lengthened_axes``, 3D only): along each, the block's ends move so the
+    part's two planes there sit just inside a background cell (``aligned_span``, its finest
+    level the finest the dictionaries refine to); the block keeps its counts.
 
     ``locations`` (host API 1.8, a mesh of several regions): one ``(point, region)``
     per body; written as ``locationsInMesh`` in place of ``locationInMesh``, so each
@@ -518,6 +574,19 @@ def write_hexdominant_dicts(
     (case_dir / "constant" / "triSurface").mkdir(parents=True, exist_ok=True)
 
     verts, loc = _padded_box(bounds_m)
+    aligned: dict[str, dict[str, float]] = {}
+    if aligned_axes and two_d is None:
+        counts = [int(v) for v in block.strip().strip("()").split()]
+        finest = max([int(walls_level), int(feature_level), *(int(r["level"]) for r in refine_regions or [])])
+        moved_verts = [list(v) for v in verts]
+        for k in sorted({int(a) for a in aligned_axes}):
+            c = "xyz"[k]
+            a, b, gap = aligned_span(float(bounds_m[f"{c}min"]), float(bounds_m[f"{c}max"]), counts[k], finest)
+            mid = 0.5 * (float(bounds_m[f"{c}min"]) + float(bounds_m[f"{c}max"]))
+            for v in moved_verts:
+                v[k] = a if v[k] < mid else b
+            aligned[c] = {"from_m": a, "to_m": b, "gap_m": gap, "finest_level": finest}
+        verts = [(v[0], v[1], v[2]) for v in moved_verts]
     if location_m is not None:
         loc = tuple(float(v) for v in location_m)
     block_boundary = ""
@@ -784,6 +853,7 @@ def write_hexdominant_dicts(
             "n_feature_snap_iter": snap_nfeat,
         },
         "snappy_geometry_rev": int(SNAPPY_GEOMETRY_REV),
+        **({"block_aligned": aligned} if aligned else {}),
         "patches": [{"name": n, "type": t} for n, _f, t in surfaces],
         **({"two_d": {k: v for k, v in two_d.items() if k not in ("labels",)}} if two_d is not None else {}),
         **(

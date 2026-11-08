@@ -172,6 +172,10 @@ ignored.
 
 - `MAGNUSIM_E2E_LOCK_WAIT_MS` bounds the wait (default 4 hours).
 - `MAGNUSIM_E2E_LOCK=0` skips the lock.
+- `MAGNUSIM_TEST_MESH_RANKS=<n>` (tests only) runs Hex-dominant's snappyHexMesh on at most
+  n ranks; the app takes every physical core. The mesh pytests in `tests/wsl/test_mesh_wsl.py`
+  set 8 unless it is set; set it for a WSL e2e or a validation probe on a PC whose WSL other
+  work shares (the app server passes it on to the mesher).
 
 **Two runs in one tree** need different `MAGNUSIM_E2E_PORT`s. A run on a port other
 than 8083 gets its own projects root and prefs (`e2e/.tmp-projects-<port>`,

@@ -79,6 +79,8 @@ def _env() -> dict[str, str]:
     env["MAGNUSIM_WSL_CASE_ROOT"] = "/home/golden/cases"
     env["PYTHONPATH"] = os.pathsep.join([str(PY), str(PY / "sdk")])
     env.pop("CFDDESK_UPDATE_GOLDEN", None)
+    # The scripts as the app renders them (a WSL test's rank cap is not part of a golden).
+    env.pop("MAGNUSIM_TEST_MESH_RANKS", None)
     return env
 
 

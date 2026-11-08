@@ -20,14 +20,24 @@ These run the same command lines to the end (``pytest -m wsl``, minutes each):
   pipe were six to ten times their size across it, and snappyHexMesh left cells of
   negative volume (Generate failed, naming the check: Daniel's D1). With the cells kept
   within 3 times as long as the longer side across (F2) the block has more cells along
-  the pipe, and the mesh passes checkMesh.
+  the pipe, and the mesh passes checkMesh. It is the part's shape too (``_pipe_shape``):
+  its inlet and outlet flat on their planes, they, the wall and the pipe's cross-section
+  within 0.5 % of the CAD faces' areas (2026-11-08: its caps had a chamfer at the rim,
+  312.41 mm² for the disc's 314.16).
 - W7 Hex-dominant on a flat plate (100 x 100 x 2 mm, fineness 4, the box of Heat
   Transfer's cavity-slab.step): the rule is for needles only, so the plate keeps the
   block it had before F2 (30 30 12; F2's first rule gave it 200 200 12, and its
   refinement reached snappyHexMesh's cell limit), and Generate ends done.
+- W8 Hex-dominant on validation case 2's pipe (20 mm across, 600 mm long, 30 D, fineness
+  6): the 80 cells along it that the cap gives left its inlet's and outlet's centres 1.26 mm
+  inside the pipe, and the slanted ring round each made them 344.3 mm² for 314.16 (+9.6 %,
+  the extra flow of a Normal to face inlet; 2026-11-08). With the block's ends just outside
+  the pipe's two planes (``snappy_hexdominant.aligned_span``) it is the part's shape, as W6.
 
 Each run has its own WSL case id and removes it when done. Record the cell
-counts after a deliberate change with ``CFDDESK_UPDATE_GOLDEN=1``.
+counts after a deliberate change with ``CFDDESK_UPDATE_GOLDEN=1``. snappyHexMesh runs on
+at most 8 ranks here (``MAGNUSIM_TEST_MESH_RANKS``, set unless the caller sets it), not on
+every physical core as in the app: the PC's WSL may be running other work.
 """
 
 from __future__ import annotations
@@ -58,6 +68,7 @@ def _results(argv: list[str], *, timeout: float = 3600) -> tuple[int, list[dict[
     UTF-8, as the app runs it (scripts/job-runner.js): a reason can say "90°"."""
     env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(PY), str(PY / "sdk")]), "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
     env.pop("CFDDESK_UPDATE_GOLDEN", None)
+    env.setdefault("MAGNUSIM_TEST_MESH_RANKS", "8")
     r = subprocess.run(
         [sys.executable, *argv], cwd=str(PY), env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout
     )
@@ -281,12 +292,66 @@ def _pipe_project(tmp: Path, *, d_mm: float, l_mm: float) -> tuple[Path, Path]:
     return proj, mesh
 
 
-def test_w6_hex_dominant_long_pipe(tmp_path: Path):
-    from cfddesk.wsl.mesh_run import checkmesh_failure
+def _cad_areas(tmp: Path, l_mm: float) -> dict[str, float]:
+    """The pipe's CAD faces' areas (mm²): its inlet and outlet discs and its wall."""
+    from cfddesk.cad.step import load_step
 
-    proj, mesh = _pipe_project(tmp_path, d_mm=20.0, l_mm=1100.0)
+    faces = load_step(tmp / "pipe.step").faces
+    inlet = [f.area for f in faces if abs(f.centroid[0]) < 1e-6]
+    outlet = [f.area for f in faces if abs(f.centroid[0] - l_mm) < 1e-6]
+    wall = [f.area for f in faces if f.surface_type != "Plane"]
+    assert len(inlet) == len(outlet) == len(wall) == 1
+    return {"inlet": float(inlet[0]), "outlet": float(outlet[0]), "wall": float(wall[0])}
+
+
+def _pipe_shape(case: Path, *, l_mm: float) -> dict[str, Any]:
+    """The meshed pipe's shape as the app's reader (pyvista's OpenFOAM reader) reads its mesh:
+    each patch's area (mm², the sum of its faces') and its points' span along the pipe (mm), and
+    the pipe's cross-section (mm²) a quarter, half and three quarters along it."""
+    import pyvista as pv
+
+    foam = case / "case.foam"
+    foam.write_text("", encoding="ascii")
+    reader = pv.OpenFOAMReader(str(foam))
+    reader.enable_all_patch_arrays()
+    data = reader.read()
+    patches: dict[str, dict[str, Any]] = {}
+    boundary = data["boundary"]
+    for name in boundary.keys():
+        poly = boundary[name]
+        if poly is None or poly.n_cells == 0:
+            continue
+        area = float(poly.compute_cell_sizes(length=False, area=True, volume=False)["Area"].sum()) * 1e6
+        x = poly.points[:, 0] * 1e3
+        patches[name] = {"area_mm2": area, "x_mm": [float(x.min()), float(x.max())]}
+    internal = data["internalMesh"]
+    sections: dict[float, float] = {}
+    for frac in (0.25, 0.5, 0.75):
+        # 0.137 mm off the plane, so the cut is not on a background cell's face.
+        cut = internal.slice(normal=(1.0, 0.0, 0.0), origin=((frac * l_mm + 0.137) / 1e3, 0.0, 0.0))
+        sections[frac] = float(cut.compute_cell_sizes(length=False, area=True, volume=False)["Area"].sum()) * 1e6
+    return {"patches": patches, "sections": sections}
+
+
+def _assert_pipe_shape(shape: dict[str, Any], cad: dict[str, float], *, l_mm: float) -> None:
+    """The pipe's mesh is the part's shape: its inlet and outlet flat on their planes (every point
+    within 0.05 mm), and they, the wall and the cross-section within 0.5 % of the CAD faces."""
+    got = shape["patches"]
+    for name, patch, plane in (("inlet", "velocity_inlet_1", 0.0), ("outlet", "pressure_1", l_mm)):
+        span = got[patch]["x_mm"]
+        assert abs(span[0] - plane) <= 0.05 and abs(span[1] - plane) <= 0.05, (name, span, shape)
+        assert abs(got[patch]["area_mm2"] / cad[name] - 1.0) <= 0.005, (name, got[patch]["area_mm2"], cad[name], shape)
+    assert abs(got["walls"]["area_mm2"] / cad["wall"] - 1.0) <= 0.005, (got["walls"]["area_mm2"], cad["wall"])
+    for frac, area in shape["sections"].items():
+        assert abs(area / cad["inlet"] - 1.0) <= 0.005, (frac, area, cad["inlet"], shape)
+
+
+def _hex_dominant_pipe(tmp: Path, tag: str, *, l_mm: float) -> tuple[int, dict[str, Any], str, Path]:
+    """A 20 mm pipe ``l_mm`` long meshed by Hex-dominant at fineness 6, no layers: the
+    generator's exit code, its result, the end of its stderr and the case folder."""
+    proj, mesh = _pipe_project(tmp, d_mm=20.0, l_mm=l_mm)
     case = mesh / "case"
-    wsl_case = _case_id("w6")
+    wsl_case = _case_id(tag)
     try:
         rc, results, err = _results(
             [
@@ -299,17 +364,44 @@ def test_w6_hex_dominant_long_pipe(tmp_path: Path):
     finally:
         remove_wsl_case(wsl_case)
     assert results, (rc, err)
-    res = results[-1]
+    return rc, results[-1], err, case
+
+
+def _assert_passes_checkmesh(rc: int, res: dict[str, Any], err: str, case: Path) -> None:
+    """Generate ends done and the mesh passes checkMesh, with no failed check at all."""
+    from cfddesk.wsl.mesh_run import checkmesh_failure
+
     log = (case / "log.checkMesh").read_text(encoding="utf-8")
-    # The cap: 147 cells along the 1463 mm (padded) pipe, 9.95 mm each, 3 times the 3.33 mm
-    # across y (8 cells); it had 68, 21.5 mm each.
-    assert res["block"] == "(147 8 12)", res
-    # The mesh passes checkMesh, with no failed check at all, and Generate ends done.
     assert rc == 0 and res["ok"] is True and "error" not in res, (rc, res, err, log[-3000:])
     assert checkmesh_failure(log) is None
     quality = res["quality"]
     assert quality["known"] is True and quality["ok"] is True and not quality.get("failed"), quality
     assert res["n_cells"] and res["n_cells"] > 0
+    # snappyHexMesh ran on no more ranks than the cap.
+    snappy = (case / "log.snappyHexMesh").read_text(encoding="utf-8", errors="replace")
+    ranks = re.search(r"^nProcs\s*:\s*(\d+)", snappy, re.M)
+    assert ranks is None or int(ranks.group(1)) <= int(os.environ.get("MAGNUSIM_TEST_MESH_RANKS", "8")), ranks
+
+
+def test_w6_hex_dominant_long_pipe(tmp_path: Path):
+    rc, res, err, case = _hex_dominant_pipe(tmp_path, "w6", l_mm=1100.0)
+    # The cap: 147 cells along the 1463 mm (padded) pipe, 9.95 mm each, 3 times the 3.33 mm
+    # across y (8 cells); it had 68, 21.5 mm each.
+    assert res["block"] == "(147 8 12)", res
+    _assert_passes_checkmesh(rc, res, err, case)
+    shape = _pipe_shape(case, l_mm=1100.0)
+    print(f"[w6] {res['n_cells']} cells, {json.dumps(shape)}")
+    _assert_pipe_shape(shape, _cad_areas(tmp_path, 1100.0), l_mm=1100.0)
+
+
+def test_w8_hex_dominant_case_2_pipe(tmp_path: Path):
+    rc, res, err, case = _hex_dominant_pipe(tmp_path, "w8", l_mm=600.0)
+    # The cap's block (67 cells along before it, 11.9 mm each).
+    assert res["block"] == "(80 8 12)", res
+    _assert_passes_checkmesh(rc, res, err, case)
+    shape = _pipe_shape(case, l_mm=600.0)
+    print(f"[w8] {res['n_cells']} cells, {json.dumps(shape)}")
+    _assert_pipe_shape(shape, _cad_areas(tmp_path, 600.0), l_mm=600.0)
 
 
 def _box_project(tmp: Path, *, x_mm: float, y_mm: float, z_mm: float) -> tuple[Path, Path]:

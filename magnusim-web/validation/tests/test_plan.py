@@ -130,10 +130,23 @@ def test_a_thick_layer_stack_on_a_thin_wall_cell_is_flagged():
     # The turbulent pipe of the design: 800 mm long, 20 mm across, at fineness 7.
     est = estimate(mesh, faces, [0.0, 800.0, -10.0, 10.0, -10.0, 10.0], 251_327.0)
     assert est is not None
-    # 85 cells along (12.5 mm, 3.76 times the 3.33 mm across y) before the 3:1 cap; 107 with it.
+    # 85 cells along (12.5 mm, 3.76 times the 3.33 mm across y) before the 3:1 cap; 107 with it,
+    # the block's ends just outside the pipe's two planes: 9.88 mm each (9.94 over the padded
+    # span), so its wall cells (level 3) are 1.235 mm along.
     assert est["block"] == [107, 8, 12]
-    assert est["wall_cell_mm"] == pytest.approx([1.2430, 0.4156, 0.2771], abs=1e-3)
+    assert est["wall_cell_mm"] == pytest.approx([1.2354, 0.4156, 0.2771], abs=1e-3)
     assert est["warnings"] and "6.135 times the smallest wall cell" in est["warnings"][0]
+
+
+def test_case_2s_hex_dominant_plan_has_the_meshers_cells(tmp_path: Path):
+    """Case 2's 30 D pipe at fineness 6: the cap's 80 cells along (67 before it), the block's
+    ends 0.567 mm outside the inlet's and outlet's planes, so its cells are 9.855 mm along, not
+    the 9.975 of the padded span, and its wall cells (level 2) 2.464 mm."""
+    for variant in ("hexdominant_sst", "hexdominant_kepsilon"):
+        est = make_plan(cases.get("c2"), variant, tmp_path / variant, cores=8)["mesh"]["estimate"]
+        assert est["block"] == [80, 8, 12]
+        assert est["base_cell_mm"] == pytest.approx([9.8546, 3.325, 2.2167], abs=1e-3)
+        assert est["wall_cell_mm"] == pytest.approx([2.4637, 0.8312, 0.5542], abs=1e-3)
 
 
 def test_a_custom_size_becomes_a_level_of_the_diagonal_base_size():

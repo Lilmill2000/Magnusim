@@ -1,7 +1,8 @@
 """What a plan's Hex-dominant mesh will be, worked out before Generate with the mesher's own
 sizing functions (``cfddesk.mesh.snappy_hexdominant``): the background block (at least 8
 cells across y and 12 across z, whatever the fineness, and along a long thin part as many as
-keep its cells within 3 times as long as their side across y), the cell size on each axis at the
+keep its cells within 3 times as long as their side across y, its ends there just outside the
+part's two planes), the cell size on each axis at the
 walls' level and at each custom size's level (a custom size becomes a level of the
 diagonal's base size, so on a thin part its cells come out finer and flatter than asked),
 the wall layers' stack against the wall cell, and a rough cell count.
@@ -81,8 +82,10 @@ def estimate(mesh: dict[str, Any], faces: list[dict[str, Any]], bounds_mm: list[
     from cfddesk.mesh.snappy_hexdominant import (
         _PAD,
         DEFAULT_BAND_CELLS,
+        aligned_span,
         base_cell_size,
         fineness_params,
+        lengthened_axes,
         refine_distance_m,
         refinement_level_for_size,
     )
@@ -103,6 +106,15 @@ def estimate(mesh: dict[str, Any], faces: list[dict[str, Any]], bounds_mm: list[
     base_mm = [ext_mm[i] * _PAD / block[i] for i in range(3)]
     walls_level = int(params["walls_level"])
     iso_base_m = base_cell_size(f, bounds_m) or 0.0
+    # Along an axis the aspect cap lengthened the mesher moves the block's ends to just outside
+    # the part's planes there, its cells up to one cell over the part shorter (aligned_span, by
+    # the finest level written: the features', the walls' or a custom size's).
+    finest = max([walls_level, int(params["feature_level"]), *(
+        refinement_level_for_size(iso_base_m, size_to_metres(ref.get("default_size", 2), ref.get("default_size_unit") or "mm"))
+        for ref in mesh.get("refinements") or [] if is_surface_custom(ref) and _label_ids(ref.get("faces") or []))])
+    for k in lengthened_axes(f, bounds_m):
+        lo_m, hi_m, _gap = aligned_span(b[2 * k], b[2 * k + 1], block[k], finest)
+        base_mm[k] = (hi_m - lo_m) * 1000.0 / block[k]
 
     def dims(level: int) -> list[float]:
         return [v / 2**level for v in base_mm]
