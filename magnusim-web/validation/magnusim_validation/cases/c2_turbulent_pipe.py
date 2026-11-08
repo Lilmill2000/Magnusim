@@ -255,8 +255,11 @@ NOTES = (
     "(8 cells of negative volume) although Generate finished; a 40 D pipe at fineness 7 kept 0.03 of its 2 wall "
     "layers and failed checkMesh too. Since 2026-11-07 Hex-dominant keeps every background cell within 3 times as "
     "long as wide, and a Hex-dominant mesh that fails checkMesh ends Generate failed: the 55 D pipe at fineness 6 "
-    "passes checkMesh (its worst face 65.7 degrees), and this 30 D pipe meshes on an 80 × 8 × 12 block where it had "
-    "67 × 8 × 12.",
+    "passes checkMesh (its worst face 65.1 degrees), and this 30 D pipe meshes on an 80 × 8 × 12 block where it had "
+    "67 × 8 × 12. On that block snappyHexMesh first left the inlet and outlet off their planes (the third full run, "
+    "2026-11-08): their centres 1.26 mm inside the pipe, each 344.3 mm² for the disc's 314.2, so the inlet let in "
+    "9.6 % more and f read 23 % high. Since 2026-11-08 the block's ends sit just outside the pipe's two planes, and "
+    "the ends are 314.0 mm².",
     "Two readings of the same friction: the pressure drop along the axis, and the wall shear stress the run saved. "
     "In a settled, developed flow they are equal (the force balance -dp/dx = 4 tau_w / D); a gap between them is a "
     "finding about the solution, not about the reading.",

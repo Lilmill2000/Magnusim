@@ -16,6 +16,22 @@
 //   panel says Mesh failed with those words, the tree says Failed, the same after a reload; the
 //   Assistant's read_setup mesh reads the same words (two-way parity). Fails on the code before
 //   F2: it "meshed" (the block was 68 cells along, and snappyHexMesh could refine nothing).
+// - With WSL: validation case 2's pipe (20 mm across, 600 mm long, 30 D) at fineness 6, its inlet
+//   a Normal to face velocity of 1 m/s. The 80 cells along it that the cap gives left the inlet's
+//   and outlet's centres 1.26 mm inside the pipe on ce6aa3eb, and each end 344.3 mm² for the
+//   disc's 314.2: the inlet let in 9.6 % more than 1 m/s times the face's area (2026-11-08). Now
+//   the block's ends sit just outside the pipe's two planes. The person sees it on the run's
+//   Monitors panel: the Inlet card's Details read Flow rate 0.314 L/s in (the face's area times
+//   1 m/s; ce6aa3eb read 0.344 L/s), and the run's monitors give the inlet's flow and its mesh
+//   area within 0.5 % of the face's. Only a real mesh shows this: the fake mesher (the default
+//   suite's) runs no snappyHexMesh, so no default-suite test can see the cap.
+// - With WSL: a 25 D pipe (20 mm across, 500 mm long) at fineness 6 with Physics-based meshing
+//   off. The cap leaves its block alone (67 8 12), but its cells are still 3 times as long as
+//   their side across, and on 6c515bc6 (which moved only the cap's axis) its inlet's centre
+//   stayed 1.87 mm inside the pipe and each end came out 334.7 mm² for the disc's 314.2 (+6.5 %;
+//   python/tests/wsl/test_mesh_wsl.py W9), and the Inlet card read Flow rate 0.332 L/s in. Now
+//   every axis whose cells are long against their side across gets its ends just outside the
+//   part's planes: the card reads 0.314 L/s in, as for case 2's pipe.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { mkdirSync, readFileSync } from 'node:fs';
 import { delimiter, dirname, join } from 'node:path';
@@ -31,6 +47,9 @@ const WEB = join(HERE, '..');
 // Pipes along +x from x = 0: 20 mm across and 1,100 mm long (55 D); 1 mm across and 20 m long.
 const PIPE_55D = { file: 'pipe-55d.step', length: 1100 };
 const PIPE_20000D = { file: 'pipe-20000d.step', length: 20000 };
+// Validation case 2's pipe: 20 mm across and 600 mm long (30 D); one 500 mm long (25 D).
+const PIPE_30D = { file: 'pipe-30d.step', length: 600 };
+const PIPE_25D = { file: 'pipe-25d.step', length: 500 };
 const WSL = (process.env.MAGNUSIM_E2E_WSL || process.env.CFDDESK_E2E_WSL) === '1';
 const STEP = { timeout: 30_000 };
 const stamp = () => Date.now().toString(36);
@@ -58,10 +77,11 @@ async function postOk(request, url, data) {
 
 /**
  * A pipe in a project of its own: an Incompressible Flow study (laminar), its inlet the disc at
- * x = 0, its outlet the disc at the far end, its side a wall; its mesh Hex-dominant at `fineness`,
- * no boundary layers.
+ * x = 0 (`inlet` m/s, normal to the face), its outlet the disc at the far end, its side a wall
+ * (named `wall`); its mesh Hex-dominant at `fineness`, Physics-based meshing `physics`, no
+ * boundary layers.
  */
-async function pipeStudy(request, base, pipe, { title, fineness }) {
+async function pipeStudy(request, base, pipe, { title, fineness, inlet: speed = 0.1, wall = 'Wall', physics = true }) {
   const made = await postOk(request, `${base}/api/project`, { title: `${title} ${stamp()}`, description: '', category: 'Other', units: 'Metric', folder: 'My Projects' });
   const pid = String(made.id || made.project?.id);
   const q = (path, extra = {}) => `${base}${path}?${new URLSearchParams({ project_id: pid, ...extra })}`;
@@ -94,9 +114,9 @@ async function pipeStudy(request, base, pipe, { title, fineness }) {
   await postOk(request, `${base}/api/simulation/update`, { project_id: pid, simulation_id: sid, turbulence_model: 'laminar' });
   await postOk(request, `${base}/api/materials`, { project_id: pid, simulation_id: sid, preset: 'custom', name: 'Pipe fluid', kinematic_viscosity: 1e-3, density: 1, assigned_volumes: ['Body1'] });
   const bc = (data) => postOk(request, `${base}/api/bcs`, { project_id: pid, simulation_id: sid, geometry_id: gid, ...data });
-  await bc({ name: 'Inlet', bc_type: 'Velocity inlet', velocity_type: 'Fixed', value: 0.1, unit: 'm/s', direction: 'Normal to face', faces: [label(inlet[0])] });
+  await bc({ name: 'Inlet', bc_type: 'Velocity inlet', velocity_type: 'Fixed', value: speed, unit: 'm/s', direction: 'Normal to face', faces: [label(inlet[0])] });
   await bc({ name: 'Outlet', bc_type: 'Pressure', pressure_type: 'Fixed value', value: 0, unit: 'Pa', faces: [label(outlet[0])] });
-  await bc({ name: 'Wall', bc_type: 'Wall', wall_type: 'No-slip', faces: [label(side[0])] });
+  await bc({ name: wall, bc_type: 'Wall', wall_type: 'No-slip', faces: [label(side[0])] });
   const meshes = (await json(request, q('/api/mesh', { simulation_id: sid }))).meshes || [];
   let mid = meshes[0] && meshes[0].id ? String(meshes[0].id) : '';
   if (!mid) mid = String((await postOk(request, `${base}/api/mesh`, { project_id: pid, simulation_id: sid, create: true, name: 'Mesh 1' })).mesh.id);
@@ -106,10 +126,10 @@ async function pipeStudy(request, base, pipe, { title, fineness }) {
     mesh_id: mid,
     fineness,
     automatic_boundary_layers: false,
-    physics_based_meshing: true,
+    physics_based_meshing: physics,
     advanced: { mesh_engine: 'snappy_hexdominant' },
   });
-  return { pid, sid, gid, mid, q };
+  return { pid, sid, gid, mid, q, inletArea: Number(inlet[0].area) };
 }
 
 const liveOf = async (request, s) => (await json(request, s.q('/api/mesh', { simulation_id: s.sid, mesh_id: s.mid }))).mesh?.live_mesh_result || {};
@@ -234,4 +254,89 @@ test('WSL: a 55 D pipe at fineness 6 on Hex-dominant ends Mesh ready with no fai
   await expectReady(form);
   form = await openMeshPanel(page, '', s);
   await expectReady(form);
+});
+
+/**
+ * A pipe study's (`pipeStudy`, its inlet 1 m/s) Hex-dominant mesh generated from the Mesh panel,
+ * done with `block` and checkMesh passed, and a short run: what the person reads on the run's
+ * Monitors panel, the Inlet card's Flow rate the disc's area times 1 m/s (0.314 L/s), then the
+ * run's monitors, the inlet's flow and its mesh area within 0.5 % of the face's. `tag` names it
+ * in the log.
+ */
+async function expectInletFlowOfItsFace(page, request, s, { block, tag }) {
+  // The disc's area (mm²) from the CAD face, and what 1 m/s through it is (m³/s).
+  const area = s.inletArea > 0 ? s.inletArea : Math.PI * 100;
+  expect(area).toBeCloseTo(Math.PI * 100, 2);
+  const flow = area * 1e-6;
+  const form = await openMeshPanel(page, '', s);
+  await form.locator('[data-mesh-generate="1"]').click();
+  await expect(form.locator('[data-mesh-status]')).toHaveAttribute('data-mesh-status', /ready|failed/, { timeout: 1_200_000 });
+  const live = await liveOf(request, s);
+  expect(live.status, JSON.stringify(live.error || '')).toBe('done');
+  expect(live.block_used).toBe(block);
+  expect(live.quality).toMatchObject({ known: true, ok: true, n_failed: 0 });
+
+  // A short run on 8 cores: the inlet's flow is set by its velocity from the first iteration.
+  const made = await postOk(request, '/api/run/create', { project_id: s.pid, simulation_id: s.sid, name: 'Run 1', mesh_id: s.mid });
+  const rid = String(made.run_id || made.run?.id || made.run?.run_id);
+  await postOk(request, '/api/run/update', { project_id: s.pid, simulation_id: s.sid, run_id: rid, endTime: 5, writeInterval: 5, cores: 8 });
+  await postOk(request, '/api/run/start', { project_id: s.pid, simulation_id: s.sid, run_id: rid });
+  const runQ = `project_id=${encodeURIComponent(s.pid)}&simulation_id=${encodeURIComponent(s.sid)}&run_id=${encodeURIComponent(rid)}`;
+  await expect
+    .poll(async () => (await json(request, `/api/run/status?${runQ}`)).run?.status, { timeout: 900_000, intervals: [3_000] })
+    .toMatch(/^(done|failed|stopped)$/);
+  const ended = (await json(request, `/api/run/status?${runQ}`)).run || {};
+  expect(ended.status, String(ended.error || ended.log_excerpt || '').slice(-1500)).toBe('done');
+
+  // What the person sees: the run's Monitors panel from the tree, the Inlet card's Details.
+  await page.goto(`/#/p/${encodeURIComponent(s.pid)}`);
+  await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, s.pid, { timeout: 90_000 });
+  const folder = page.locator(`#left-tree [data-w17-sim-id="${s.sid}"] li[data-w27-sim-control="1"]`).first();
+  await expect(folder).toBeVisible(STEP);
+  if (!(await folder.evaluate((el) => el.classList.contains('expanded')))) await folder.locator(':scope > .tree-row .tw').click();
+  const runLi = page.locator(`#left-tree li[data-w27-run="${rid}"]`).first();
+  await expect(runLi).toBeVisible(STEP);
+  if (!(await runLi.evaluate((el) => el.classList.contains('expanded')))) await runLi.locator(':scope > .tree-row .tw').click();
+  await page.locator(`#left-tree li[data-w27-run-rcs="${rid}"] > .tree-row .tl`).click();
+  const hub = page.locator('#panel-results-hub');
+  await expect(hub).toBeVisible(STEP);
+  const card = hub.locator('#run-monitors-list .mon-card').filter({ has: page.locator('.mon-card-name', { hasText: /^Inlet$/ }) });
+  await expect(card).toHaveCount(1, STEP);
+  await card.locator('details.mon-more > summary').click();
+  const flowRow = card.locator('.mon-grid .mon-k', { hasText: /^Flow rate$/ });
+  const flowText = flowRow.locator('xpath=following-sibling::span[1]');
+  await expect(flowText).toHaveText(/ L\/s /, STEP);
+  console.log(`[hex long pipe wsl] ${tag}: the Inlet card reads Flow rate ${await flowText.textContent()}`);
+  // 1 m/s through the 314.16 mm² face: 0.314 L/s, as the panel writes it.
+  await expect(flowText).toHaveText(`${(flow * 1000).toFixed(3)} L/s in`, STEP);
+
+  // The run's monitors: the inlet's flow and its mesh area within 0.5 % of the face's.
+  const doc = await json(request, `/api/run/monitors?${runQ}`);
+  const rows = ['monitors', 'custom', 'patches', 'rows'].flatMap((k) => (Array.isArray(doc[k]) ? doc[k] : []));
+  const inletRow = rows.find((m) => m.name === 'Inlet');
+  expect(inletRow, JSON.stringify(rows.map((m) => [m.key, m.name, m.patch]))).toBeTruthy();
+  const points = ['series', 'points', 'rows', 'values'].map((k) => inletRow[k]).find((v) => Array.isArray(v) && v.length) || [inletRow.last];
+  const q = Math.abs(Number(points.at(-1)?.Q_m3s));
+  console.log(`[hex long pipe wsl] ${tag}: ${live.n_cells} cells; inlet flow ${q} m³/s for ${flow}, its mesh area ${Number(inletRow.area_m2) * 1e6} mm² for ${area}`);
+  expect(Math.abs(q / flow - 1)).toBeLessThan(0.005);
+  expect(Math.abs((Number(inletRow.area_m2) * 1e6) / area - 1)).toBeLessThan(0.005);
+}
+
+test("WSL: case 2's 30 D pipe on Hex-dominant lets in what its inlet face's area does: the Inlet card reads Flow rate 0.314 L/s at 1 m/s", async ({ page, request }) => {
+  test.skip(!WSL, NO_WSL);
+  test.setTimeout(1_800_000);
+  page.setDefaultTimeout(60_000);
+  // Its wall's patch "walls": the core suite's test plugin puts a monitor on that patch in every solve.
+  const s = await pipeStudy(request, '', PIPE_30D, { title: 'Pipe 30 D WSL', fineness: 6, inlet: 1, wall: 'Walls' });
+  // The cap's block (67 cells along before it); ce6aa3eb let in 9.6 % more (0.344 L/s).
+  await expectInletFlowOfItsFace(page, request, s, { block: '(80 8 12)', tag: '30 D' });
+});
+
+test("WSL: a 25 D pipe on Hex-dominant with Physics-based meshing off lets in what its inlet face's area does: the Inlet card reads Flow rate 0.314 L/s at 1 m/s", async ({ page, request }) => {
+  test.skip(!WSL, NO_WSL);
+  test.setTimeout(1_800_000);
+  page.setDefaultTimeout(60_000);
+  const s = await pipeStudy(request, '', PIPE_25D, { title: 'Pipe 25 D WSL', fineness: 6, inlet: 1, wall: 'Walls', physics: false });
+  // The block the cap leaves alone; on 6c515bc6 the card read 0.332 L/s.
+  await expectInletFlowOfItsFace(page, request, s, { block: '(67 8 12)', tag: '25 D, physics-based off' });
 });

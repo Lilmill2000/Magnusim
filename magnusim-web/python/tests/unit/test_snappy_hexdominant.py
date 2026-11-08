@@ -289,3 +289,24 @@ def test_polymesh_counts_ascii_owner_without_note(tmp_path: Path):
     owner = _foam_header("ascii") + b"5\n(\n0\n2\n1\n0\n2\n)\n"
     c = read_polymesh_counts(_poly(tmp_path, owner))
     assert (c["n_points"], c["n_cells"], c["n_faces"]) == (5, 3, 5)
+
+
+def test_a_test_can_cap_the_meshers_ranks(monkeypatch: pytest.MonkeyPatch):
+    """MAGNUSIM_TEST_MESH_RANKS (tests only): snappyHexMesh runs on at most that many ranks, so a
+    WSL test on a PC whose WSL other work shares stays within it; unset, the script is the one
+    the app runs (every physical core), byte for byte."""
+    import generate_snappy
+
+    monkeypatch.delenv("MAGNUSIM_TEST_MESH_RANKS", raising=False)
+    plain = generate_snappy.render_snappy_script(dst="/home/u/cases/c", win_out="/mnt/c/p/mesh", generate_id="g-1")
+    template = generate_snappy._SNAPPY_SH.read_text(encoding="utf-8").lstrip("\ufeff")
+    assert plain == template.replace("__DST__", "/home/u/cases/c").replace("__WIN_OUT__", "/mnt/c/p/mesh").replace("__GENERATE_ID__", "g-1")
+    monkeypatch.setenv("MAGNUSIM_TEST_MESH_RANKS", "8")
+    capped = generate_snappy.render_snappy_script(dst="/home/u/cases/c", win_out="/mnt/c/p/mesh", generate_id="g-1")
+    cap = 'if [ "$NPROC" -gt 8 ]; then\n  NPROC=8\nfi\n'
+    assert capped == plain.replace(generate_snappy._NPROC_FLOOR, generate_snappy._NPROC_FLOOR + cap)
+    # After the core count, before the ranks are used.
+    assert capped.index("PHYS=$(lscpu") < capped.index(cap) < capped.index('mpirun -np "$NPROC"')
+    monkeypatch.setenv("MAGNUSIM_TEST_MESH_RANKS", "eight")
+    with pytest.raises(RuntimeError, match="MAGNUSIM_TEST_MESH_RANKS"):
+        generate_snappy.render_snappy_script(dst="/home/u/cases/c", win_out="/mnt/c/p/mesh", generate_id="g-1")
