@@ -113,10 +113,13 @@ used as destructive test fixtures.
   (2026-11-07, commit 977c1480, 14 runs, with Heat Transfer's set from the same
   commit) put 46 of 48 inside; the two outside are the turbulent pipe's friction
   with k-omega SST on the Standard mesher (-14 % from the pressure drop, -17 %
-  from the wall shear stress), a limitation recorded with its probes. It is
-  report-only: its tolerances are not locked until Daniel has reviewed that run,
-  so it does not gate a release yet, and its
-  mesh studies cover a few cases only. Quick physics checks of the case writer
+  from the wall shear stress), a limitation recorded with its probes. The
+  tolerances were locked on 2026-11-07, after Daniel reviewed the second full
+  run of the whole set: the 46 values inside have locked bands, and a locked
+  value outside its band fails `npm run test:validation` and the report's check
+  and blocks a release; the two of k-omega SST on Standard are report-only
+  until that limit is fixed (Heat Transfer's set has no bands and stays
+  report-only). Its mesh studies cover a few cases only. Quick physics checks of the case writer
   (`npm run test:physics`) run in the full test tier before a push.
 
 The frozen hexcore reference directory was left untouched.

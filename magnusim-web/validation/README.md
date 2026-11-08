@@ -18,6 +18,8 @@ npm run validation:report                                 # VALIDATION.md and do
 npm run validation:report -- --check                      # exit 1 when they are out of date
 ```
 
+Both report commands also exit 1, and say which, when a locked value fails its band (Rules, below).
+
 It needs WSL with OpenFOAM v2606 (the app's Setup). `MAGNUSIM_E2E_PORT` picks the app
 server's port; `MAGNUSIM_E2E_LOCK=0` runs it beside another WSL test run (keep `--cores` low
 then). No default browser suite and no CI job runs it (`scripts/e2e-suites.mjs`); the harness's
@@ -48,7 +50,7 @@ own tests run in `npm run test:py` (`tests/`) and `npm run test:server`
    vector's components kept, `app_sampling`; a patch field the run saved, `case_file`),
    kept in `raw/sample_<key>.json`; then `result.json`, the
    compared values with their source (`route:<path>`, `app_sampling`), how each was measured, its reference
-   with the citation, the error and the proposed band; the mesh (cells, checkMesh, wall
+   with the citation, the error, the band and the verdict (`model.verdict_of`); the mesh (cells, checkMesh, wall
    layers asked and applied: RH2's mesh facts), the pre-run check, the run (iterations,
    convergence, time, ranks, numerics as written) and its health (RH1); the app's commit,
    OpenFOAM's version and WSL's load. A run that cannot produce its numbers (a setup the app
@@ -57,7 +59,8 @@ own tests run in `npm run test:py` (`tests/`) and `npm run test:server`
    (`not_settled`: more than the case's `SETTLE_DRIFT` over the last 10 % of iterations), and
    a transient run whose periodic signal never settles within it (`not_settled`: case 5's
    shedding, `extract.settled_window`).
-4. **Report** (`python -m magnusim_validation report`): `VALIDATION.md`, `docs/validation/`
+4. **Report** (`python -m magnusim_validation report`): every committed value judged by the locks
+   (`locks.py`, Rules below), then `VALIDATION.md`, `docs/validation/`
    (`index.html`, `results.json`) and the figures (`docs/validation/img/`, matplotlib), with
    Heat Transfer's own validation set after the cases (`heat_transfer.py`: its committed
    `bundled-plugins/heat_transfer/validation/results.json`, not run again; its runs go through
@@ -73,7 +76,8 @@ and its project is still on the server, and otherwise meshes its own.
 | Path | What it is |
 |---|---|
 | `magnusim_validation/cases/` | One module per case: geometry, face selectors, requests per variant, references with citations, tolerances, extraction, figures |
-| `magnusim_validation/model.py` | References, tolerances, the comparison (report-only until locked) |
+| `magnusim_validation/model.py` | References, tolerances (locked, or report-only with why), the comparison and its verdict |
+| `magnusim_validation/locks.py` | Every committed value judged against its case's band now; what fails the report and its check |
 | `magnusim_validation/geometry.py`, `faces.py`, `plan.py` | The STEP, the app's face table and selectors, `plan.json` |
 | `magnusim_validation/evaluate.py`, `extract.py`, `result.py` | `result.json` and its checker, the numerics |
 | `magnusim_validation/sampling.py`, `mesh_plan.py` | Reads of the run's case folder; what a Hex-dominant plan's mesh will be (one cell across too) |
@@ -93,14 +97,26 @@ and its project is still on the server, and otherwise meshes its own.
   The values and bands come from the reference-data check of 2026-11-04 (each value's
   source read, or two transcriptions compared); where the harness's design proposed other
   bands, the reference data win.
-- Report-only until Daniel has reviewed a full run of the whole set; then the tolerances are
-  locked (`Tolerance(locked=True)`) and a locked quantity outside its band fails the run.
-  `results/` holds the second full run of all six cases and every variant (2026-11-07, commit
-  977c1480 with no changes, OpenFOAM v2606, 8 cores, one run at a time, 71.9 minutes), after the
-  two fixes below (Standard's laminar friction and k-omega SST at the wall), with Heat
-  Transfer's own set run from the same commit after it: 46 of its 48 compared values inside
-  their bands, the two outside k-omega SST's friction on Standard (f -14.25 % and f_tau
-  -17.05 %: a limitation, below). Nothing is locked until Daniel has reviewed that run. The
+- The tolerances were locked on 2026-11-07, after Daniel reviewed the second full run of the
+  whole set (below). Every band is `Tolerance(locked=True)` but those of case 2's k-omega SST
+  on Standard (f and f_tau), which are report-only until that limit is fixed
+  (`c2_turbulent_pipe.REPORT_ONLY`, `Tolerance(report_only=...)` with why: still compared and
+  shown with their band, error and the case's note, "report only: known limit of k-omega SST on
+  Standard's tetrahedra", with no pass or fail; taking the variant out of `REPORT_ONLY` locks
+  them). The lock changed no band. A locked value outside its band, or with no value, fails the
+  run (`npm run test:validation`: a verdict `fail` in its result), the report and its check
+  (`npm run validation:report`, `-- --check`: `locks.py` judges every committed value against its
+  case's band now; a locked value from a run that did not end ok reads FAIL with why, and a band
+  or a reference changed since its run fails too), so it blocks a release; a
+  report-only value never fails. `results/` holds the second full run of all six cases and every
+  variant (2026-11-07, commit 977c1480 with no changes, OpenFOAM v2606, 8 cores, one run at a
+  time, 71.9 minutes), after the two fixes below (Standard's laminar friction and k-omega SST at
+  the wall), with Heat Transfer's own set run from the same commit after it: 46 of its 48
+  compared values inside their bands (the 46 locked), the two outside k-omega SST's friction on
+  Standard (f -14.25 % and f_tau -17.05 %: a limitation, below; the two report-only). Its
+  `result.json` files keep the verdicts their evaluation gave before the lock (`report_only`); the
+  report and the page show the locks' (`verdict_at_run` beside it in the page's `results.json`).
+  Heat Transfer's own set has no bands and stays report-only. The
   first full run (2026-11-06, commit aaabb531, 57.7 minutes; in git's history) had 43 of its 48
   inside. Against it the second moved case 1's Standard f Re from +15.99 to +0.03 % (its
   development length from -5.53 to -0.19 %), case 2's k-omega SST on Hex-dominant from f
@@ -141,7 +157,7 @@ their citations; this list is what those modules must start from.
 | 2, turbulent pipe, Re 5e4 | Built (`c2_turbulent_pipe.py`). f = 0.0211 (McKeon et al. 2005, eq. 3.5), band ±10 % with wall functions (±5 % if y+ < 1). The reference data ask for f at least 40 D from the inlet (turbulent development is about 20 D), or a cyclic or mapped inlet. This case meets neither: the app has no cyclic inlet (G9) and Hex-dominant cannot mesh a pipe much longer than 30 D cleanly (below), so the pipe is 30 D and f is read over x/D 20 to 25, with the slope over 15 to 20 beside it; a run whose two differ by more than 1 % carries a warning (still developing there, so not yet its developed value; from the Auto inlet it reads below it: Development at 20 to 25 D, below). |
 | 3, lid-driven cavity, Re 100 and 1000 | Built (`c3_lid_cavity.py`, one cell across). Ghia et al. (1982) Tables I and II (`refs/ghia_1982_*.csv`, with the one correction at x = 0.9063, Re 1000: -0.51550); extrema within 3 % of Botella and Peyret (1998, `refs/botella_peyret_1998_extrema.csv`), the profiles' largest difference at most 0.03 U, the primary vortex centre within 0.01 L and psi_min within 2 % of Marchi et al. (2009, `refs/marchi_2009_vortex.csv`). |
 | 4, backward-facing step | Built (`c4_backward_step.py`, one cell across). Re_D 100 on Armaly et al.'s expansion ratio 1.942 against their Fig. 14, x1/S = 3.00, ±10 % (the flow turns three-dimensional near Re 400, so not the design's Re 389; `refs/armaly_1983_fig14_x1.csv`); Re_D 800 on expansion ratio 2 against Gartling (1990), x_r/S = 12.20, ±7 %, and the top wall's bubble (9.70 and 20.96 S, ±10 %; `refs/gartling_1990_re800.csv`), the literature's scatter beside it (`refs/bfs_re800_scatter.csv`); the outlet 30 H after the step; a uniform inlet with an upstream channel of 10 h or 10 H (no profile inlet). Read from the wall shear stress the run saved on the floor and the top, U_x 0.02 S from the wall as the cross-check. Re_D 800 solves with SIMPLEC: with SIMPLE it never settled. |
-| 5, cylinder | Built (`c5_cylinder.py`, one cell across). Re 20 and 40 steady against Cd 2.02 and 1.50 and L/D 0.93 and 2.24 (±5 %, `refs/cylinder_re20_re40.csv`; the literature's spread in `refs/cylinder_steady_scatter.csv`); Re 100 transient against St 0.164 (±3 %), the mean Cd 1.33 (±5 %), CL rms 0.23 (±15 %) and the mean L/D 1.41 (±10 %, as information; `refs/cylinder_re100.csv`, `refs/cylinder_re100_scatter.csv`). The domain the reference data ask for: 40 D wide (blockage 2.5 %), 15 D upstream and 30 D downstream, one Freestream round it; a Forces monitor on the cylinder with the study's reference values; 300 D/U of run, the shedding read by the harness over whole periods after the transient (at least 20; G8). How much a coarser and a finer mesh (the probes of 2026-11-06) move the reported values: the case's notes in `VALIDATION.md`, worked out from its results. |
+| 5, cylinder | Built (`c5_cylinder.py`, one cell across). Re 20 and 40 steady against Cd 2.02 and 1.50 and L/D 0.93 and 2.24 (±5 %, `refs/cylinder_re20_re40.csv`; the literature's spread in `refs/cylinder_steady_scatter.csv`); Re 100 transient against St 0.164 (±3 %), the mean Cd 1.33 (±5 %), CL rms 0.23 (±15 %) and the mean L/D 1.41 (±10 %; `refs/cylinder_re100.csv`, `refs/cylinder_re100_scatter.csv`). The domain the reference data ask for: 40 D wide (blockage 2.5 %), 15 D upstream and 30 D downstream, one Freestream round it; a Forces monitor on the cylinder with the study's reference values; 300 D/U of run, the shedding read by the harness over whole periods after the transient (at least 20; G8). How much a coarser and a finer mesh (the probes of 2026-11-06) move the reported values: the case's notes in `VALIDATION.md`, worked out from its results. |
 | 6, sphere, Re 100 | Built (`c6_sphere.py`, 3D). Cd 1.09 ±5 % (the mean of the Schiller-Naumann and Clift, Grace & Weber correlations, 1.0917 and 1.0870; Johnson & Patel's computed 1.08 beside it; `refs/sphere_re100_cd.csv`) and L/D 0.88 ±7 % (Johnson & Patel, Taneda's measured 0.89 beside it; `refs/sphere_re100.csv`), the literature's spread in `refs/sphere_re100_scatter.csv`; the separation angle read from the wall shear stress the run saved and shown without a band. The box the reference data ask for: 15 D to each side and 15 D downstream (upstream the design's 8 D), one Freestream on all six sides; a Forces monitor on the sphere with the study's reference values (area pi D² / 4). Hex-dominant at fineness 4 with three custom sizes on the sphere, each with a Refine out to (D/32 out to 0.25 D, D/16 out to 1.5 D, D/8 out to 3 D: cells of D/42, D/21 and D/10.5) and 4 wall layers, 0.06 D in all, asserted applied. How much fineness 3 and 5 with the same sizes (the probes of 2026-11-06) move Cd and L/D: the case's notes in `VALIDATION.md`, worked out from its results (L/D grows towards a finer mesh). |
 
 App gaps found so far, and what they block:
@@ -383,7 +399,8 @@ App gaps found so far, and what they block:
   the Assistant's guide say what a pipe read on each mesher, the pre-run check warns of a Standard
   mesh with no wall layers under a turbulent study (`wall_friction_mesh`: k-epsilon there read
   -12.8 % and -13.0 % with Robust and diverged with Accurate, with the skew-corrected lines or the
-  plain), and Hex-dominant suits turbulent wall friction.
+  plain), and Hex-dominant suits turbulent wall friction. Its two values are report-only until
+  this is fixed (the lock of 2026-11-07, Rules above).
 - **k-omega SST resolved to the wall** (case 2's wedge, a limitation): with the first cell's
   centre at y+ 1 to 3 every wall treatment tried read f 6 to 9 % low (Spalding's law, nutk,
   nutLowRe with k fixed at 0, Menter's omega on the wall face, kLowRe; a finer stretch, 1.05 and

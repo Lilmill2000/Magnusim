@@ -110,7 +110,8 @@ def test_case_6_reads_the_drag_the_wakes_closure_and_the_separation_angle(tmp_pa
     assert q["l_over_d"]["value"] == pytest.approx(0.89, abs=2e-3) and q["l_over_d"]["reference"]["value"] == 0.88
     assert q["l_over_d"]["tolerance"]["rel_pct"] == 7.0 and "Johnson" in q["l_over_d"]["reference"]["citation"]
     assert q["l_over_d"]["source"] == "app_sampling" and q["cd"]["source"] == "route:/api/run/monitors"
-    assert all(x["verdict"] == "report_only" for x in q.values())
+    # Locked (2026-11-07): inside their bands, they pass.
+    assert all(x["verdict"] == "pass" and x["tolerance"]["locked"] for x in q.values())
     s = res["shown"]
     assert s["cd_from_fd"] == pytest.approx(q["cd"]["value"], rel=1e-9)
     assert s["cdp"] + s["cdv"] == pytest.approx(q["cd"]["value"], rel=1e-9)

@@ -101,7 +101,9 @@ if (!GATE) {
       console.log(`RESULT ${r.case}/${r.variant}: ${result.status} ${result.status_detail || ''}\n  ${rows.join('\n  ')}`);
       test.info().annotations.push({ type: 'result', description: `${result.status}: ${rows.join('; ')}` });
       expect(existsSync(join(dir, 'result.json'))).toBe(true);
-      // The run must produce its numbers; a locked quantity outside its tolerance fails it too.
+      // The run must produce its numbers; a locked quantity outside its tolerance fails it too
+      // (a report-only one, verdict report_only, never does). The report after it judges every
+      // committed value by the locks again (magnusim_validation/locks.py).
       expect(evaluated.status, `${result.status_detail || why}`).toBe(MESH_ONLY ? 'mesh_only' : 'ok');
       expect(drove && drove.outcome, why).toBe(MESH_ONLY ? 'mesh_only' : 'done');
       const failedLocked = (result.quantities || []).filter((q) => q.verdict === 'fail');

@@ -107,7 +107,8 @@ def test_case_4_reads_the_reattachment_and_the_top_bubble_of_a_known_flow(tmp_pa
     assert q["xs_top_over_s"]["value"] == pytest.approx(9.5, abs=2e-3)
     assert q["xr_top_over_s"]["value"] == pytest.approx(21.0, abs=2e-3)
     assert q["xr_over_s"]["error"]["rel_pct"] == pytest.approx(100 * (q["xr_over_s"]["value"] - 12.2) / 12.2)
-    assert q["xr_over_s"]["within"] is True and q["xr_over_s"]["verdict"] == "report_only"
+    # Locked (2026-11-07): inside its band, it passes.
+    assert q["xr_over_s"]["within"] is True and q["xr_over_s"]["verdict"] == "pass"
     assert q["xr_over_s"]["source"] == "case_file:<latest>/wallShearStress"
     assert q["xr_over_s"]["uncertainty"]["kind"] == "pct" and q["xr_over_s"]["uncertainty"]["value"] < 0.2
     s = res["shown"]

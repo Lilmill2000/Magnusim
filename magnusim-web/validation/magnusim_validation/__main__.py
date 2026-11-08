@@ -7,7 +7,8 @@
     evaluate <run dir> [--failed WHY]       result.json from the driver's raw answers
     report [--check]                        VALIDATION.md and the public page (docs/validation/)
                                             from the committed results; --check exits 1 when
-                                            either is not what the results give
+                                            either is not what the results give, and both exit
+                                            1 when a locked value fails its band (locks.py)
 """
 
 from __future__ import annotations

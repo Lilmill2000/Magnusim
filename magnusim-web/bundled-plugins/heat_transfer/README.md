@@ -276,8 +276,9 @@ cavity at Ra = 10³ to 10⁶, laminar pipes with a fixed wall heat flux and a fi
 temperature (Shah & London), a turbulent pipe against Gnielinski's correlation, and the
 composite wall and heated block below. Each case runs through the app's own path
 (mesher, prepare job, `solve.sh`), Hex-dominant for every case and Standard on the pipes.
-The numbers, the setups and the sources: [VALIDATION.md](VALIDATION.md). It is
-report-only for now; `pytest -m validation` runs it.
+The numbers, the setups and the sources: [VALIDATION.md](VALIDATION.md). It has no
+tolerance bands, so it stays report-only (the app's validation set locked its own on
+2026-11-07); `pytest -m validation` runs it.
 
 The full run of 2026-11-07 (Heat Transfer 0.2.0, OpenFOAM v2606, 8 processes, 34.6 minutes, from
 the commit of the app's validation set's second full run), the error against the reference

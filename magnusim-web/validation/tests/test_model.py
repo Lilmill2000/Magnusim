@@ -56,6 +56,21 @@ def test_report_only_until_locked():
     assert compare(spec(locked=True), 60.0)["verdict"] == "fail"
 
 
+def test_a_report_only_band_never_fails_and_a_locked_one_does():
+    """Daniel (2026-11-07): the locked values pass or fail; k-omega SST on Standard stays report-only,
+    with its reason, compared with the same band."""
+    known = QuantitySpec(key="f", label="f", unit="", how="a fit", source="route:/api/plot-over-path", reference=REF,
+                         tolerance=Tolerance(rel_pct=2.0, report_only="known limit of a model on a mesh"))
+    for v in (63.0, 60.0, 30.0):
+        row = compare(known, v)
+        assert row["verdict"] == "report_only"
+        assert row["tolerance"]["report_only"] == "known limit of a model on a mesh" and row["tolerance"]["locked"] is False
+    assert compare(known, 60.0)["within"] is False and compare(known, 63.0)["within"] is True
+    assert compare(spec(locked=True), 60.0)["verdict"] == "fail" and compare(spec(locked=True), 60.0)["within"] is False
+    with pytest.raises(ValueError, match="not both"):
+        Tolerance(rel_pct=2.0, locked=True, report_only="known limit")
+
+
 def test_a_value_the_run_did_not_give_is_missing():
     for v in (None, float("nan"), float("inf")):
         row = compare(spec(), v)

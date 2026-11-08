@@ -2,9 +2,11 @@
 conditions it holds for and how sure the value is) and its tolerance, and the comparison of
 a run's value with them (``compare``).
 
-Report-only until locked: a quantity's verdict is ``report_only`` (its row still says whether
-the value is inside the proposed band) until its tolerance is ``locked``; then it is ``pass`` or
-``fail``, and a failed locked quantity fails the run (and blocks a release).
+The verdict (``verdict_of``): a ``locked`` band gives ``pass`` or ``fail``, and a failed locked
+quantity fails the run and the report's check (and blocks a release); a band that is
+``report_only`` (with its reason: a known limit) or not locked yet gives ``report_only``, never a
+failure, and its row still says whether the value is inside the band. The tolerances were locked
+on 2026-11-07, after Daniel reviewed the second full run of the whole set (``locks.py``).
 """
 
 from __future__ import annotations
@@ -53,13 +55,17 @@ class Reference:
 class Tolerance:
     """A band around the reference: in per cent of it (``rel_pct``), or in the quantity's own
     unit (``abs_tol``: a reference of zero, a profile within 0.01 U, a vortex centre within
-    0.01 L); exactly one of the two. ``locked`` once the first full run has been reviewed;
-    until then the band is proposed (report-only)."""
+    0.01 L); exactly one of the two. ``locked``: the band gives pass or fail (2026-11-07, after
+    Daniel reviewed the second full run of the whole set). ``report_only``: why the band gives no
+    pass or fail although the set is locked, in plain words (a known limit; the report shows
+    "report only: <why>"); cleared and ``locked`` set once the limit is fixed. Neither: a proposed
+    band, not locked yet (report-only)."""
 
     rel_pct: float | None = None
     locked: bool = False
     note: str = ""
     abs_tol: float | None = None
+    report_only: str = ""
 
     def __post_init__(self) -> None:
         given = [v for v in (self.rel_pct, self.abs_tol) if v is not None]
@@ -67,6 +73,8 @@ class Tolerance:
             raise ValueError("a tolerance is either relative (rel_pct) or absolute (abs_tol), one of the two")
         if not (math.isfinite(given[0]) and given[0] > 0):
             raise ValueError("a tolerance must be a finite, positive number")
+        if self.locked and self.report_only.strip():
+            raise ValueError("a band is locked or report-only (with its reason), not both")
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -98,10 +106,20 @@ def error_of(value: float, reference: float) -> dict[str, float | None]:
     return {"abs": value - reference, "rel_pct": rel}
 
 
+def verdict_of(tolerance: Tolerance, within: bool | None) -> str:
+    """A compared value's verdict: ``missing`` without a value (``within`` None), ``pass`` or
+    ``fail`` in a locked band, else ``report_only`` (a report-only band never fails)."""
+    if within is None:
+        return "missing"
+    if tolerance.locked:
+        return "pass" if within else "fail"
+    return "report_only"
+
+
 def compare(spec: QuantitySpec, value: float | None, *, uncertainty: dict[str, Any] | None = None,
             detail: str = "") -> dict[str, Any]:
     """The quantity's row of ``result.json``: the value, its error against the reference,
-    whether it is inside the tolerance band, and the verdict (report-only until locked).
+    whether it is inside the tolerance band, and the verdict (``verdict_of``).
     A value the run could not give is ``None``: its verdict is ``missing``."""
     row: dict[str, Any] = {
         "key": spec.key,
@@ -127,9 +145,5 @@ def compare(spec: QuantitySpec, value: float | None, *, uncertainty: dict[str, A
         within = abs(float(err["abs"] or 0.0)) <= tol.abs_tol
     else:
         within = abs(float(err["rel_pct"] or 0.0)) <= float(tol.rel_pct or 0.0)
-    row.update({"value": v, "error": err, "within": within})
-    if spec.tolerance.locked:
-        row["verdict"] = "pass" if within else "fail"
-    else:
-        row["verdict"] = "report_only"
+    row.update({"value": v, "error": err, "within": within, "verdict": verdict_of(tol, within)})
     return row

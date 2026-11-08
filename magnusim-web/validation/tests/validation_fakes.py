@@ -14,6 +14,7 @@ from magnusim_validation.plan import make_plan
 NU, D, L = 2e-4, 0.02, 0.3
 AREA = math.pi * D * D / 4
 LAMBDA = 0.012  # the synthetic centreline's development scale (m)
+REAL_SCALE = 0.0295  # one whose development length (5.73 D) is inside the band of 5.77 D ± 15 %
 
 
 def _write(d: Path, name: str, doc: Any) -> None:
@@ -29,8 +30,8 @@ def _line(xs: list[float], vals: list[float], axis: int = 0, fixed: tuple[float,
     return {"status": 200, "n_valid": len(vals), "values": vals, "sample_points": pts, "reason": "ok"}
 
 
-def _centreline(x: float) -> float:
-    return 2.0 - math.exp(-x / LAMBDA)
+def _centreline(x: float, scale: float = LAMBDA) -> float:
+    return 2.0 - math.exp(-x / scale)
 
 
 def _cells() -> dict:
@@ -59,10 +60,11 @@ def _wall_shear() -> dict:
 
 
 def fake_run(run_dir: Path, *, layers_applied: bool = True, driver: dict | None = None, lines: bool = True,
-             samples: bool = True, converged: bool = True, drift: float = 0.0) -> None:
+             samples: bool = True, converged: bool = True, drift: float = 0.0, scale: float = LAMBDA) -> None:
     """A run's raw answers as the driver saves them, for an exact developed pipe flow. Not
     ``converged``: it stops at 3000 iterations, the inlet pressure moving by ``drift`` (relative)
-    over its last 10 %."""
+    over its last 10 %. ``scale``: the centreline's development scale (m); the default's
+    development length (2.35 D) is far outside its band, ``REAL_SCALE``'s (5.73 D) inside."""
     raw = run_dir / "raw"
     raw.mkdir(parents=True, exist_ok=True)
     drv = driver or {"outcome": "done", "failed_step": None, "error": None, "ids": {"run_id": "r1"},
@@ -93,8 +95,8 @@ def fake_run(run_dir: Path, *, layers_applied: bool = True, driver: dict | None 
         {"key": "mon_inlet", "patch": "inlet", "area_m2": AREA, "last": {"Q_m3s": -q, "p_Pa": p_in}, "series": p_hist},
         {"key": "mon_outlet", "patch": "outlet", "area_m2": AREA, "last": {"Q_m3s": q}},
     ], "custom": [
-        {"key": f"probes_centreline_{i}", "point": [i * D, 0, 0], "last": {"U": [_centreline(i * D), 0.0, 0.0]},
-         "series": [{"t": k, "U": [_centreline(i * D), 0.0, 0.0]} for k in range(1, n_it + 1)]}
+        {"key": f"probes_centreline_{i}", "point": [i * D, 0, 0], "last": {"U": [_centreline(i * D, scale), 0.0, 0.0]},
+         "series": [{"t": k, "U": [_centreline(i * D, scale), 0.0, 0.0]} for k in range(1, n_it + 1)]}
         for i in range(1, 15)
     ]})
     if samples:
@@ -105,7 +107,7 @@ def fake_run(run_dir: Path, *, layers_applied: bool = True, driver: dict | None 
         # Developed: -dp/dx = 32 nu U / D² (rho = 1) after a short entrance.
         g = 32 * NU * 1.0 / D**2
         _write(raw, "line_p_axis", _line(xs, [g * (L - x) for x in xs]))
-        _write(raw, "line_u_axis", _line(xs, [_centreline(x) for x in xs]))
+        _write(raw, "line_u_axis", _line(xs, [_centreline(x, scale) for x in xs]))
         ys = [-D / 2 + D * i / 100 for i in range(101)]
         _write(raw, "line_u_radial", _line(ys, [2.0 * (1 - (y / (D / 2)) ** 2) for y in ys], axis=1, fixed=(0.24, 0, 0)))
 

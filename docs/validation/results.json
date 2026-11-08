@@ -451,17 +451,19 @@
      },
      "tolerance": {
       "rel_pct": 2.0,
-      "locked": false,
+      "locked": true,
       "note": "the answer is exact, so only mesh error remains",
-      "abs_tol": null
+      "abs_tol": null,
+      "report_only": ""
      },
      "error": {
       "abs": -0.7972386246632865,
       "rel_pct": -1.2456853510363852
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "-dp/dx 15.8090 Pa/m from 60 samples (slope standard error 0.00 %, r² 1.000000); D_eff 19.995 mm, U_b 1.0000 m/s"
+     "verdict": "pass",
+     "detail": "-dp/dx 15.8090 Pa/m from 60 samples (slope standard error 0.00 %, r² 1.000000); D_eff 19.995 mm, U_b 1.0000 m/s",
+     "verdict_at_run": "report_only"
     },
     {
      "key": "ucl",
@@ -483,17 +485,19 @@
      },
      "tolerance": {
       "rel_pct": 1.5,
-      "locked": false,
+      "locked": true,
       "note": "",
-      "abs_tol": null
+      "abs_tol": null,
+      "report_only": ""
      },
      "error": {
       "abs": 0.0053739142654603,
       "rel_pct": 0.268695713273015
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "u_c 2.0054 m/s (standard error 0.0010) from 400 cells within 5.00 mm of the axis, over U_b 1.0000 m/s; the cells nearest the axis (r = 1.834 mm) read 1.9379 m/s, the exact profile there 1.9327"
+     "verdict": "pass",
+     "detail": "u_c 2.0054 m/s (standard error 0.0010) from 400 cells within 5.00 mm of the axis, over U_b 1.0000 m/s; the cells nearest the axis (r = 1.834 mm) read 1.9379 m/s, the exact profile there 1.9327",
+     "verdict_at_run": "report_only"
     },
     {
      "key": "le",
@@ -515,17 +519,19 @@
      },
      "tolerance": {
       "rel_pct": 15.0,
-      "locked": false,
+      "locked": true,
       "note": "",
-      "abs_tol": null
+      "abs_tol": null,
+      "report_only": ""
      },
      "error": {
       "abs": -0.12212152739920512,
       "rel_pct": -2.11649094279385
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "99 % of 1.9354 m/s reached at x = 112.9 mm"
+     "verdict": "pass",
+     "detail": "99 % of 1.9354 m/s reached at x = 112.9 mm",
+     "verdict_at_run": "report_only"
     }
    ],
    "series": {
@@ -4085,17 +4091,19 @@
      },
      "tolerance": {
       "rel_pct": 2.0,
-      "locked": false,
+      "locked": true,
       "note": "the answer is exact, so only mesh error remains",
-      "abs_tol": null
+      "abs_tol": null,
+      "report_only": ""
      },
      "error": {
       "abs": 0.021761373420844166,
       "rel_pct": 0.03400214597006901
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "-dp/dx 16.0403 Pa/m from 60 samples (slope standard error 0.02 %, r² 0.999998); D_eff 19.978 mm, U_b 1.0000 m/s"
+     "verdict": "pass",
+     "detail": "-dp/dx 16.0403 Pa/m from 60 samples (slope standard error 0.02 %, r² 0.999998); D_eff 19.978 mm, U_b 1.0000 m/s",
+     "verdict_at_run": "report_only"
     },
     {
      "key": "ucl",
@@ -4117,17 +4125,19 @@
      },
      "tolerance": {
       "rel_pct": 1.5,
-      "locked": false,
+      "locked": true,
       "note": "",
-      "abs_tol": null
+      "abs_tol": null,
+      "report_only": ""
      },
      "error": {
       "abs": -0.005090043828053892,
       "rel_pct": -0.2545021914026946
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "u_c 1.9949 m/s (standard error 0.0004) from 3907 cells within 4.99 mm of the axis, over U_b 1.0000 m/s; the cells nearest the axis (r = 0.001 mm) read 1.9954 m/s, the exact profile there 2.0000"
+     "verdict": "pass",
+     "detail": "u_c 1.9949 m/s (standard error 0.0004) from 3907 cells within 4.99 mm of the axis, over U_b 1.0000 m/s; the cells nearest the axis (r = 0.001 mm) read 1.9954 m/s, the exact profile there 2.0000",
+     "verdict_at_run": "report_only"
     },
     {
      "key": "le",
@@ -4149,17 +4159,19 @@
      },
      "tolerance": {
       "rel_pct": 15.0,
-      "locked": false,
+      "locked": true,
       "note": "",
-      "abs_tol": null
+      "abs_tol": null,
+      "report_only": ""
      },
      "error": {
       "abs": -0.010922077090541826,
       "rel_pct": -0.18929076413417378
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "99 % of 1.9471 m/s reached at x = 115.1 mm"
+     "verdict": "pass",
+     "detail": "99 % of 1.9471 m/s reached at x = 115.1 mm",
+     "verdict_at_run": "report_only"
     }
    ],
    "series": {
@@ -7998,17 +8010,19 @@
      },
      "tolerance": {
       "rel_pct": 10.0,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's band for RANS with wall functions (an engineering judgement)",
-      "abs_tol": null
+      "abs_tol": null,
+      "report_only": ""
      },
      "error": {
       "abs": -0.0008734444431263838,
       "rel_pct": -4.139547123821724
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "-dp/dx 0.5058 Pa/m from 50 samples (slope standard error 0.02 %, r² 1.00000); D_eff 19.995 mm, U_b 1.0000 m/s"
+     "verdict": "pass",
+     "detail": "-dp/dx 0.5058 Pa/m from 50 samples (slope standard error 0.02 %, r² 1.00000); D_eff 19.995 mm, U_b 1.0000 m/s",
+     "verdict_at_run": "report_only"
     },
     {
      "key": "f_tau",
@@ -8030,17 +8044,19 @@
      },
      "tolerance": {
       "rel_pct": 10.0,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's band for RANS with wall functions (an engineering judgement)",
-      "abs_tol": null
+      "abs_tol": null,
+      "report_only": ""
      },
      "error": {
       "abs": -0.0006462495801926212,
       "rel_pct": -3.062794218922375
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "tau_w 0.0025567 Pa over 2772 wall faces, U_b 1.0000 m/s"
+     "verdict": "pass",
+     "detail": "tau_w 0.0025567 Pa over 2772 wall faces, U_b 1.0000 m/s",
+     "verdict_at_run": "report_only"
     }
    ],
    "series": {
@@ -10814,17 +10830,19 @@
      },
      "tolerance": {
       "rel_pct": 10.0,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's band for RANS with wall functions (an engineering judgement)",
-      "abs_tol": null
+      "abs_tol": null,
+      "report_only": ""
      },
      "error": {
       "abs": -0.0016600460310446097,
       "rel_pct": -7.867516734808577
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "-dp/dx 0.48613 Pa/m from 50 samples (slope standard error 0.01 %, r² 1.00000); D_eff 19.995 mm, U_b 1.0000 m/s"
+     "verdict": "pass",
+     "detail": "-dp/dx 0.48613 Pa/m from 50 samples (slope standard error 0.01 %, r² 1.00000); D_eff 19.995 mm, U_b 1.0000 m/s",
+     "verdict_at_run": "report_only"
     },
     {
      "key": "f_tau",
@@ -10846,17 +10864,19 @@
      },
      "tolerance": {
       "rel_pct": 10.0,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's band for RANS with wall functions (an engineering judgement)",
-      "abs_tol": null
+      "abs_tol": null,
+      "report_only": ""
      },
      "error": {
       "abs": -0.0015208606749647323,
       "rel_pct": -7.207870497463187
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "tau_w 0.0024474 Pa over 2772 wall faces, U_b 1.0000 m/s"
+     "verdict": "pass",
+     "detail": "tau_w 0.0024474 Pa over 2772 wall faces, U_b 1.0000 m/s",
+     "verdict_at_run": "report_only"
     }
    ],
    "series": {
@@ -13572,7 +13592,8 @@
       "rel_pct": 10.0,
       "locked": false,
       "note": "the reference data's band for RANS with wall functions (an engineering judgement)",
-      "abs_tol": null
+      "abs_tol": null,
+      "report_only": "known limit of k-omega SST on Standard's tetrahedra"
      },
      "error": {
       "abs": -0.003006041663973332,
@@ -13580,7 +13601,8 @@
      },
      "within": false,
      "verdict": "report_only",
-     "detail": "-dp/dx 0.45412 Pa/m from 50 samples (slope standard error 0.58 %, r² 0.99838); D_eff 19.922 mm, U_b 1.0000 m/s"
+     "detail": "-dp/dx 0.45412 Pa/m from 50 samples (slope standard error 0.58 %, r² 0.99838); D_eff 19.922 mm, U_b 1.0000 m/s",
+     "verdict_at_run": "report_only"
     },
     {
      "key": "f_tau",
@@ -13604,7 +13626,8 @@
       "rel_pct": 10.0,
       "locked": false,
       "note": "the reference data's band for RANS with wall functions (an engineering judgement)",
-      "abs_tol": null
+      "abs_tol": null,
+      "report_only": "known limit of k-omega SST on Standard's tetrahedra"
      },
      "error": {
       "abs": -0.0035978845289968316,
@@ -13612,7 +13635,8 @@
      },
      "within": false,
      "verdict": "report_only",
-     "detail": "tau_w 0.0021878 Pa over 2132 wall faces, U_b 1.0000 m/s"
+     "detail": "tau_w 0.0021878 Pa over 2132 wall faces, U_b 1.0000 m/s",
+     "verdict_at_run": "report_only"
     }
    ],
    "series": {
@@ -16328,17 +16352,19 @@
      },
      "tolerance": {
       "rel_pct": 10.0,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's band for RANS with wall functions (an engineering judgement)",
-      "abs_tol": null
+      "abs_tol": null,
+      "report_only": ""
      },
      "error": {
       "abs": -0.00020474742828184567,
       "rel_pct": -0.970366958681733
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "-dp/dx 0.52443 Pa/m from 50 samples (slope standard error 0.23 %, r² 0.99975); D_eff 19.922 mm, U_b 1.0000 m/s"
+     "verdict": "pass",
+     "detail": "-dp/dx 0.52443 Pa/m from 50 samples (slope standard error 0.23 %, r² 0.99975); D_eff 19.922 mm, U_b 1.0000 m/s",
+     "verdict_at_run": "report_only"
     },
     {
      "key": "f_tau",
@@ -16360,17 +16386,19 @@
      },
      "tolerance": {
       "rel_pct": 10.0,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's band for RANS with wall functions (an engineering judgement)",
-      "abs_tol": null
+      "abs_tol": null,
+      "report_only": ""
      },
      "error": {
       "abs": 7.113653427389191e-05,
       "rel_pct": 0.33713997286204694
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "tau_w 0.0026464 Pa over 2132 wall faces, U_b 1.0000 m/s"
+     "verdict": "pass",
+     "detail": "tau_w 0.0026464 Pa over 2132 wall faces, U_b 1.0000 m/s",
+     "verdict_at_run": "report_only"
     }
    ],
    "series": {
@@ -19148,17 +19176,19 @@
      },
      "tolerance": {
       "rel_pct": null,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's target RMS",
-      "abs_tol": 0.01
+      "abs_tol": 0.01,
+      "report_only": ""
      },
      "error": {
       "abs": 0.0023349540189029133,
       "rel_pct": null
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "over 15 stations, the largest at y = 0.8516 L"
+     "verdict": "pass",
+     "detail": "over 15 stations, the largest at y = 0.8516 L",
+     "verdict_at_run": "report_only"
     },
     {
      "key": "u_maxdiff",
@@ -19180,17 +19210,19 @@
      },
      "tolerance": {
       "rel_pct": null,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's largest difference; Ghia et al. themselves are about 0.003 (Re 100) and 0.012 (Re 1000) off the converged values",
-      "abs_tol": 0.03
+      "abs_tol": 0.03,
+      "report_only": ""
      },
      "error": {
       "abs": 0.004469830622673171,
       "rel_pct": null
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "at y = 0.8516 L: +0.2360 against +0.2315"
+     "verdict": "pass",
+     "detail": "at y = 0.8516 L: +0.2360 against +0.2315",
+     "verdict_at_run": "report_only"
     },
     {
      "key": "v_rms",
@@ -19212,17 +19244,19 @@
      },
      "tolerance": {
       "rel_pct": null,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's target RMS",
-      "abs_tol": 0.01
+      "abs_tol": 0.01,
+      "report_only": ""
      },
      "error": {
       "abs": 0.0045776931903744175,
       "rel_pct": null
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "over 15 stations, the largest at x = 0.8594 L"
+     "verdict": "pass",
+     "detail": "over 15 stations, the largest at x = 0.8594 L",
+     "verdict_at_run": "report_only"
     },
     {
      "key": "v_maxdiff",
@@ -19244,17 +19278,19 @@
      },
      "tolerance": {
       "rel_pct": null,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's largest difference; Ghia et al. themselves are about 0.003 (Re 100) and 0.012 (Re 1000) off the converged values",
-      "abs_tol": 0.03
+      "abs_tol": 0.03,
+      "report_only": ""
      },
      "error": {
       "abs": 0.008500752973556458,
       "rel_pct": null
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "at x = 0.8594 L: -0.2330 against -0.2245"
+     "verdict": "pass",
+     "detail": "at x = 0.8594 L: -0.2330 against -0.2245",
+     "verdict_at_run": "report_only"
     },
     {
      "key": "u_min",
@@ -19276,17 +19312,19 @@
      },
      "tolerance": {
       "rel_pct": 3.0,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's band for the extrema",
-      "abs_tol": null
+      "abs_tol": null,
+      "report_only": ""
      },
      "error": {
       "abs": 0.00045740459776605347,
       "rel_pct": 0.21369812605635774
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "at y = 0.4587 L (Botella and Peyret 0.4581 L)"
+     "verdict": "pass",
+     "detail": "at y = 0.4587 L (Botella and Peyret 0.4581 L)",
+     "verdict_at_run": "report_only"
     },
     {
      "key": "v_max",
@@ -19308,17 +19346,19 @@
      },
      "tolerance": {
       "rel_pct": 3.0,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's band for the extrema",
-      "abs_tol": null
+      "abs_tol": null,
+      "report_only": ""
      },
      "error": {
       "abs": -0.0008282762255608922,
       "rel_pct": -0.46124815426439425
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "at x = 0.2376 L (Botella and Peyret 0.237 L)"
+     "verdict": "pass",
+     "detail": "at x = 0.2376 L (Botella and Peyret 0.237 L)",
+     "verdict_at_run": "report_only"
     },
     {
      "key": "v_min",
@@ -19340,17 +19380,19 @@
      },
      "tolerance": {
       "rel_pct": 3.0,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's band for the extrema",
-      "abs_tol": null
+      "abs_tol": null,
+      "report_only": ""
      },
      "error": {
       "abs": 0.0008391840713657395,
       "rel_pct": 0.33064387393598166
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "at x = 0.8103 L (Botella and Peyret 0.8104 L)"
+     "verdict": "pass",
+     "detail": "at x = 0.8103 L (Botella and Peyret 0.8104 L)",
+     "verdict_at_run": "report_only"
     },
     {
      "key": "psi_min",
@@ -19372,17 +19414,19 @@
      },
      "tolerance": {
       "rel_pct": 2.0,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's band for psi_min",
-      "abs_tol": null
+      "abs_tol": null,
+      "report_only": ""
      },
      "error": {
       "abs": 0.00017131404560113972,
       "rel_pct": 0.16548692016817784
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "at (0.6158, 0.7377) L; psi at the lid (zero for a closed cavity) within 1.2e-03 on every line"
+     "verdict": "pass",
+     "detail": "at (0.6158, 0.7377) L; psi at the lid (zero for a closed cavity) within 1.2e-03 on every line",
+     "verdict_at_run": "report_only"
     },
     {
      "key": "vortex_x",
@@ -19404,17 +19448,19 @@
      },
      "tolerance": {
       "rel_pct": null,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's band for the vortex centre",
-      "abs_tol": 0.01
+      "abs_tol": 0.01,
+      "report_only": ""
      },
      "error": {
       "abs": -0.0004057468499608641,
       "rel_pct": -0.06584554777768359
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": ""
+     "verdict": "pass",
+     "detail": "",
+     "verdict_at_run": "report_only"
     },
     {
      "key": "vortex_y",
@@ -19436,17 +19482,19 @@
      },
      "tolerance": {
       "rel_pct": null,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's band for the vortex centre",
-      "abs_tol": 0.01
+      "abs_tol": 0.01,
+      "report_only": ""
      },
      "error": {
       "abs": 0.00035846151421559114,
       "rel_pct": 0.04861813565924199
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": ""
+     "verdict": "pass",
+     "detail": "",
+     "verdict_at_run": "report_only"
     }
    ],
    "series": {
@@ -21553,17 +21601,19 @@
      },
      "tolerance": {
       "rel_pct": null,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's target RMS",
-      "abs_tol": 0.02
+      "abs_tol": 0.02,
+      "report_only": ""
      },
      "error": {
       "abs": 0.004112052682421886,
       "rel_pct": null
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "over 15 stations, the largest at y = 0.9688 L"
+     "verdict": "pass",
+     "detail": "over 15 stations, the largest at y = 0.9688 L",
+     "verdict_at_run": "report_only"
     },
     {
      "key": "u_maxdiff",
@@ -21585,17 +21635,19 @@
      },
      "tolerance": {
       "rel_pct": null,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's largest difference; Ghia et al. themselves are about 0.003 (Re 100) and 0.012 (Re 1000) off the converged values",
-      "abs_tol": 0.03
+      "abs_tol": 0.03,
+      "report_only": ""
      },
      "error": {
       "abs": 0.007600101070404319,
       "rel_pct": null
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "at y = 0.9688 L: +0.5825 against +0.5749"
+     "verdict": "pass",
+     "detail": "at y = 0.9688 L: +0.5825 against +0.5749",
+     "verdict_at_run": "report_only"
     },
     {
      "key": "v_rms",
@@ -21617,17 +21669,19 @@
      },
      "tolerance": {
       "rel_pct": null,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's target RMS",
-      "abs_tol": 0.02
+      "abs_tol": 0.02,
+      "report_only": ""
      },
      "error": {
       "abs": 0.00828369473877532,
       "rel_pct": null
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "over 15 stations, the largest at x = 0.9453 L"
+     "verdict": "pass",
+     "detail": "over 15 stations, the largest at x = 0.9453 L",
+     "verdict_at_run": "report_only"
     },
     {
      "key": "v_maxdiff",
@@ -21649,17 +21703,19 @@
      },
      "tolerance": {
       "rel_pct": null,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's largest difference; Ghia et al. themselves are about 0.003 (Re 100) and 0.012 (Re 1000) off the converged values",
-      "abs_tol": 0.03
+      "abs_tol": 0.03,
+      "report_only": ""
      },
      "error": {
       "abs": 0.015520723695755245,
       "rel_pct": null
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "at x = 0.9453 L: -0.4074 against -0.3919"
+     "verdict": "pass",
+     "detail": "at x = 0.9453 L: -0.4074 against -0.3919",
+     "verdict_at_run": "report_only"
     },
     {
      "key": "u_min",
@@ -21681,17 +21737,19 @@
      },
      "tolerance": {
       "rel_pct": 3.0,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's band for the extrema",
-      "abs_tol": null
+      "abs_tol": null,
+      "report_only": ""
      },
      "error": {
       "abs": 0.0010018557176492138,
       "rel_pct": 0.25783159618920815
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "at y = 0.1721 L (Botella and Peyret 0.1717 L)"
+     "verdict": "pass",
+     "detail": "at y = 0.1721 L (Botella and Peyret 0.1717 L)",
+     "verdict_at_run": "report_only"
     },
     {
      "key": "v_max",
@@ -21713,17 +21771,19 @@
      },
      "tolerance": {
       "rel_pct": 3.0,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's band for the extrema",
-      "abs_tol": null
+      "abs_tol": null,
+      "report_only": ""
      },
      "error": {
       "abs": -0.000976442601486438,
       "rel_pct": -0.2590413398799447
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "at x = 0.1576 L (Botella and Peyret 0.1578 L)"
+     "verdict": "pass",
+     "detail": "at x = 0.1576 L (Botella and Peyret 0.1578 L)",
+     "verdict_at_run": "report_only"
     },
     {
      "key": "v_min",
@@ -21745,17 +21805,19 @@
      },
      "tolerance": {
       "rel_pct": 3.0,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's band for the extrema",
-      "abs_tol": null
+      "abs_tol": null,
+      "report_only": ""
      },
      "error": {
       "abs": 0.0022251152612398073,
       "rel_pct": 0.4221612476125044
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "at x = 0.9086 L (Botella and Peyret 0.9092 L)"
+     "verdict": "pass",
+     "detail": "at x = 0.9086 L (Botella and Peyret 0.9092 L)",
+     "verdict_at_run": "report_only"
     },
     {
      "key": "psi_min",
@@ -21777,17 +21839,19 @@
      },
      "tolerance": {
       "rel_pct": 2.0,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's band for psi_min",
-      "abs_tol": null
+      "abs_tol": null,
+      "report_only": ""
      },
      "error": {
       "abs": 0.0003550832270194232,
       "rel_pct": 0.29854805382659755
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "at (0.5311, 0.5654) L; psi at the lid (zero for a closed cavity) within 1.4e-03 on every line"
+     "verdict": "pass",
+     "detail": "at (0.5311, 0.5654) L; psi at the lid (zero for a closed cavity) within 1.4e-03 on every line",
+     "verdict_at_run": "report_only"
     },
     {
      "key": "vortex_x",
@@ -21809,17 +21873,19 @@
      },
      "tolerance": {
       "rel_pct": null,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's band for the vortex centre",
-      "abs_tol": 0.01
+      "abs_tol": 0.01,
+      "report_only": ""
      },
      "error": {
       "abs": -0.0001313043278899917,
       "rel_pct": -0.024716108779292555
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": ""
+     "verdict": "pass",
+     "detail": "",
+     "verdict_at_run": "report_only"
     },
     {
      "key": "vortex_y",
@@ -21841,17 +21907,19 @@
      },
      "tolerance": {
       "rel_pct": null,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's band for the vortex centre",
-      "abs_tol": 0.01
+      "abs_tol": 0.01,
+      "report_only": ""
      },
      "error": {
       "abs": -3.701670359124165e-06,
       "rel_pct": -0.0006546646550632554
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": ""
+     "verdict": "pass",
+     "detail": "",
+     "verdict_at_run": "report_only"
     }
    ],
    "series": {
@@ -23997,17 +24065,19 @@
      },
      "tolerance": {
       "rel_pct": 10.0,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's band: the experiment, the digitising and the expansion ratio",
-      "abs_tol": null
+      "abs_tol": null,
+      "report_only": ""
      },
      "error": {
       "abs": -0.14619476919756913,
       "rel_pct": -4.873158973252305
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "x = 13.984 mm (1.385 H) between face centres 0.174 mm apart; 1746 floor faces"
+     "verdict": "pass",
+     "detail": "x = 13.984 mm (1.385 H) between face centres 0.174 mm apart; 1746 floor faces",
+     "verdict_at_run": "report_only"
     }
    ],
    "series": {
@@ -27538,17 +27608,19 @@
      },
      "tolerance": {
       "rel_pct": 7.0,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's band: the literature's scatter is about 6 %",
-      "abs_tol": null
+      "abs_tol": null,
+      "report_only": ""
      },
      "error": {
       "abs": -0.5156480184709018,
       "rel_pct": -4.226623102220507
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "x = 58.422 mm (5.842 H) between face centres 0.196 mm apart; 1534 floor faces"
+     "verdict": "pass",
+     "detail": "x = 58.422 mm (5.842 H) between face centres 0.196 mm apart; 1534 floor faces",
+     "verdict_at_run": "report_only"
     },
     {
      "key": "xs_top_over_s",
@@ -27570,17 +27642,19 @@
      },
      "tolerance": {
       "rel_pct": 10.0,
-      "locked": false,
-      "note": "the reference data's band for the top wall's bubble (reported only)",
-      "abs_tol": null
+      "locked": true,
+      "note": "the reference data's band for the top wall's bubble",
+      "abs_tol": null,
+      "report_only": ""
      },
      "error": {
       "abs": -0.4774064254011794,
       "rel_pct": -4.921715725785355
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "x = 46.113 mm (4.611 H)"
+     "verdict": "pass",
+     "detail": "x = 46.113 mm (4.611 H)",
+     "verdict_at_run": "report_only"
     },
     {
      "key": "xr_top_over_s",
@@ -27606,17 +27680,19 @@
      },
      "tolerance": {
       "rel_pct": 10.0,
-      "locked": false,
-      "note": "the reference data's band for the top wall's bubble (reported only)",
-      "abs_tol": null
+      "locked": true,
+      "note": "the reference data's band for the top wall's bubble",
+      "abs_tol": null,
+      "report_only": ""
      },
      "error": {
       "abs": -0.5781044970295817,
       "rel_pct": -2.7581321423167062
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "x = 101.909 mm (10.191 H)"
+     "verdict": "pass",
+     "detail": "x = 101.909 mm (10.191 H)",
+     "verdict_at_run": "report_only"
     }
    ],
    "series": {
@@ -31454,17 +31530,19 @@
      },
      "tolerance": {
       "rel_pct": 5.0,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's band: the sources' spread and the domain's size",
-      "abs_tol": null
+      "abs_tol": null,
+      "report_only": ""
      },
      "error": {
       "abs": 0.055106190000000055,
       "rel_pct": 2.7280292079207946
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "at iteration 2606; from its drag force 2.0751 (F_d / (0.5 rho U² D depth))"
+     "verdict": "pass",
+     "detail": "at iteration 2606; from its drag force 2.0751 (F_d / (0.5 rho U² D depth))",
+     "verdict_at_run": "report_only"
     },
     {
      "key": "l_over_d",
@@ -31490,17 +31568,19 @@
      },
      "tolerance": {
       "rel_pct": 5.0,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's band",
-      "abs_tol": null
+      "abs_tol": null,
+      "report_only": ""
      },
      "error": {
       "abs": -0.0006849603834421236,
       "rel_pct": -0.07365165413356167
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "x0 = 14.293 mm (1.4293 D from the centre); the most reversed U_x -0.03193 m/s at 0.915 D"
+     "verdict": "pass",
+     "detail": "x0 = 14.293 mm (1.4293 D from the centre); the most reversed U_x -0.03193 m/s at 0.915 D",
+     "verdict_at_run": "report_only"
     }
    ],
    "series": {
@@ -34174,17 +34254,19 @@
      },
      "tolerance": {
       "rel_pct": 5.0,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's band: the sources' spread and the domain's size",
-      "abs_tol": null
+      "abs_tol": null,
+      "report_only": ""
      },
      "error": {
       "abs": 0.04674979999999995,
       "rel_pct": 3.11665333333333
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "at iteration 1823; from its drag force 1.5467 (F_d / (0.5 rho U² D depth))"
+     "verdict": "pass",
+     "detail": "at iteration 1823; from its drag force 1.5467 (F_d / (0.5 rho U² D depth))",
+     "verdict_at_run": "report_only"
     },
     {
      "key": "l_over_d",
@@ -34210,17 +34292,19 @@
      },
      "tolerance": {
       "rel_pct": 5.0,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's band",
-      "abs_tol": null
+      "abs_tol": null,
+      "report_only": ""
      },
      "error": {
       "abs": 0.03853819856771734,
       "rel_pct": 1.7204552932016668
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "x0 = 27.785 mm (2.7785 D from the centre); the most reversed U_x -0.09759 m/s at 1.290 D"
+     "verdict": "pass",
+     "detail": "x0 = 27.785 mm (2.7785 D from the centre); the most reversed U_x -0.09759 m/s at 1.290 D",
+     "verdict_at_run": "report_only"
     }
    ],
    "series": {
@@ -36950,17 +37034,19 @@
      },
      "tolerance": {
       "rel_pct": 3.0,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's band",
-      "abs_tol": null
+      "abs_tol": null,
+      "report_only": ""
      },
      "error": {
       "abs": 0.0017683892471591078,
       "rel_pct": 1.078286126316529
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "f = 16.577 Hz over 39 whole periods, t = 0.6223 to 2.975 s (235.2 D/U); the spectrum's bins 0.0531 Hz apart; the mean period 0.060317 s gives St 0.16579"
+     "verdict": "pass",
+     "detail": "f = 16.577 Hz over 39 whole periods, t = 0.6223 to 2.975 s (235.2 D/U); the spectrum's bins 0.0531 Hz apart; the mean period 0.060317 s gives St 0.16579",
+     "verdict_at_run": "report_only"
     },
     {
      "key": "cd_mean",
@@ -36982,17 +37068,19 @@
      },
      "tolerance": {
       "rel_pct": 5.0,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's band",
-      "abs_tol": null
+      "abs_tol": null,
+      "report_only": ""
      },
      "error": {
       "abs": 0.020875282720087096,
       "rel_pct": 1.5695701293298567
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "over the same 39 periods; from its drag force 1.3509; pressure part 0.995, viscous 0.3559"
+     "verdict": "pass",
+     "detail": "over the same 39 periods; from its drag force 1.3509; pressure part 0.995, viscous 0.3559",
+     "verdict_at_run": "report_only"
     },
     {
      "key": "cl_rms",
@@ -37014,21 +37102,23 @@
      },
      "tolerance": {
       "rel_pct": 15.0,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's band: the most domain-sensitive value",
-      "abs_tol": null
+      "abs_tol": null,
+      "report_only": ""
      },
      "error": {
       "abs": 0.01733914146992732,
       "rel_pct": 7.5387571608379655
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "about its mean -0.00249; its amplitude (half its peak-to-peak, per period) 0.3498"
+     "verdict": "pass",
+     "detail": "about its mean -0.00249; its amplitude (half its peak-to-peak, per period) 0.3498",
+     "verdict_at_run": "report_only"
     },
     {
      "key": "l_over_d_mean",
-     "label": "Mean recirculation length L/D (Re 100, information)",
+     "label": "Mean recirculation length L/D (Re 100)",
      "unit": "D",
      "value": 1.3605352091587284,
      "uncertainty": {
@@ -37050,17 +37140,19 @@
      },
      "tolerance": {
       "rel_pct": 10.0,
-      "locked": false,
-      "note": "the reference data's band, as information",
-      "abs_tol": null
+      "locked": true,
+      "note": "the reference data's band",
+      "abs_tol": null,
+      "report_only": ""
      },
      "error": {
       "abs": -0.04946479084127153,
       "rel_pct": -3.508141194416421
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "x0 = 18.605 mm (1.8605 D from the centre) between probes 0.188 D apart; 30 probes"
+     "verdict": "pass",
+     "detail": "x0 = 18.605 mm (1.8605 D from the centre) between probes 0.188 D apart; 30 probes",
+     "verdict_at_run": "report_only"
     }
    ],
    "series": {
@@ -44961,17 +45053,19 @@
      },
      "tolerance": {
       "rel_pct": 5.0,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's band: resolved computations spread about ±4 %",
-      "abs_tol": null
+      "abs_tol": null,
+      "report_only": ""
      },
      "error": {
       "abs": -0.000247200000000003,
       "rel_pct": -0.02267889908256908
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "at iteration 548; from its drag force 1.0898 (F_d / (0.5 rho U² pi D² / 4))"
+     "verdict": "pass",
+     "detail": "at iteration 548; from its drag force 1.0898 (F_d / (0.5 rho U² pi D² / 4))",
+     "verdict_at_run": "report_only"
     },
     {
      "key": "l_over_d",
@@ -44997,17 +45091,19 @@
      },
      "tolerance": {
       "rel_pct": 7.0,
-      "locked": false,
+      "locked": true,
       "note": "the reference data's band",
-      "abs_tol": null
+      "abs_tol": null,
+      "report_only": ""
      },
      "error": {
       "abs": -0.022816743936103334,
       "rel_pct": -2.5928118109208333
      },
      "within": true,
-     "verdict": "report_only",
-     "detail": "x0 = 13.572 mm (1.3572 D from the centre); the most reversed U_x -0.1346 m/s at 0.830 D"
+     "verdict": "pass",
+     "detail": "x0 = 13.572 mm (1.3572 D from the centre); the most reversed U_x -0.1346 m/s at 0.830 D",
+     "verdict_at_run": "report_only"
     }
    ],
    "series": {
@@ -47312,7 +47408,7 @@
  ],
  "heat_transfer": {
   "source": "bundled-plugins/heat_transfer/validation/results.json",
-  "how": "Heat Transfer's own validation set: natural convection in a square cavity (de Vahl Davis), forced convection in a pipe (laminar and turbulent) and conduction through solids, each against its published value. Its runs go another way than the cases above: each case is a study set up in Python, meshed by the app's mesher and solved by the plugin's prepare job and solve.sh in WSL (the relay Start uses), not sent over the app's HTTP routes, so the two sets exercise different parts of the app. Report-only, as above. Its rows are the ones it committed (bundled-plugins/heat_transfer/validation/results.json, from pytest -m validation there); this report reads them and runs nothing.",
+  "how": "Heat Transfer's own validation set: natural convection in a square cavity (de Vahl Davis), forced convection in a pipe (laminar and turbulent) and conduction through solids, each against its published value. Its runs go another way than the cases above: each case is a study set up in Python, meshed by the app's mesher and solved by the plugin's prepare job and solve.sh in WSL (the relay Start uses), not sent over the app's HTTP routes, so the two sets exercise different parts of the app. Its rows have no tolerance bands, so the set stays report-only: the lock of 2026-11-07 covers the cases above, and nothing here passes or fails. Its rows are the ones it committed (bundled-plugins/heat_transfer/validation/results.json, from pytest -m validation there); this report reads them and runs nothing.",
   "rows": [
    {
     "case": "de Vahl Davis cavity, Ra = 1e3",

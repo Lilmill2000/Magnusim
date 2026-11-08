@@ -95,7 +95,7 @@ def _specs(variant: str) -> dict[str, QuantitySpec]:
             source="route:/api/run/monitors",
             reference=CD_REF.reference(cd["value"], citation=str(cd["source"]),
                                        where=f"Cd {cd['value']:.2f} at Re 100: the reference data's value to use (section 6)"),
-            tolerance=Tolerance(rel_pct=5.0, note="the reference data's band: resolved computations spread about ±4 %"),
+            tolerance=Tolerance(locked=True, rel_pct=5.0, note="the reference data's band: resolved computations spread about ±4 %"),
         ),
         "l_over_d": QuantitySpec(
             key="l_over_d",
@@ -105,7 +105,7 @@ def _specs(variant: str) -> dict[str, QuantitySpec]:
             source="app_sampling",
             reference=JP.reference(ld["value"], unit="D", citation=str(ld["source"]),
                                    where=f"L/D {ld['value']:.2f} at Re 100: the reference data's value to use (section 6)"),
-            tolerance=Tolerance(rel_pct=7.0, note="the reference data's band"),
+            tolerance=Tolerance(locked=True, rel_pct=7.0, note="the reference data's band"),
         ),
     }
 

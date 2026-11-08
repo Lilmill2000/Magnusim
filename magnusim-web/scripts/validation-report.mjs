@@ -2,6 +2,7 @@
 // repository's root) from the validation set's committed results, with the app's Python.
 //   npm run validation:report               write them
 //   npm run validation:report -- --check    exit 1 when either is not what the results give
+// Both exit 1, and say which, when a locked value fails its band (validation/magnusim_validation/locks.py).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';

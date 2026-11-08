@@ -45,12 +45,13 @@ turbulent pipe, the lid-driven cavity, the laminar backward-facing step, the cir
 Re 20, 40 and 100, the sphere at Re 100), each imported, meshed and solved through the app's own
 routes, every reference value with its citation and how sure that value is. The results are in
 [`magnusim-web/validation/VALIDATION.md`](magnusim-web/validation/VALIDATION.md), with the Heat
-Transfer plugin's own set beside them. They are report-only: the tolerances are not locked yet
-(that waits for Daniel's review of the full run of the whole set from one commit of 2026-11-07,
-after two fixes that the first full run led to), so the report shows where each value sits
-against its band and nothing fails on it. 46 of its 48 values sit inside their bands; the two
-that do not (the turbulent pipe's friction with k-omega SST on the Standard mesher) are listed
-there with what is known of why. A public page of the same results is built in
+Transfer plugin's own set beside them. The tolerances were locked on 2026-11-07, after Daniel
+reviewed the second full run of the whole set (one commit, after two fixes that the first full
+run led to): 46 of its 48 values sit inside their bands and those bands are locked, so a later
+run with one of them outside fails and blocks a release. The two that do not (the turbulent
+pipe's friction with k-omega SST on the Standard mesher) are report-only until that limit is
+fixed: they are shown with their error and what is known of why, with no pass or fail. Heat
+Transfer's set has no bands and stays report-only. A public page of the same results is built in
 `docs/validation/`; it is not published yet.
 
 Quick physics checks (`npm run test:physics` in `magnusim-web`, under a minute in WSL) run first

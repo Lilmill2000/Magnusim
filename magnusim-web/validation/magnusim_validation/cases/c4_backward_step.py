@@ -122,12 +122,12 @@ def _specs(variant: str) -> dict[str, QuantitySpec]:
                 source="case_file:<latest>/wallShearStress",
                 reference=ARMALY.reference(ARMALY.row(re=100)["x1_over_s"], unit="S",
                                            where="Fig. 14 at Re = 100, the measured primary reattachment x1/S"),
-                tolerance=Tolerance(rel_pct=10.0, note="the reference data's band: the experiment, the digitising and the "
+                tolerance=Tolerance(locked=True, rel_pct=10.0, note="the reference data's band: the experiment, the digitising and the "
                                     "expansion ratio"),
             )
         }
     row = {q: GARTLING.row(quantity=q) for q in ("lower_reattachment", "upper_separation", "upper_reattachment")}
-    band10 = Tolerance(rel_pct=10.0, note="the reference data's band for the top wall's bubble (reported only)")
+    band10 = Tolerance(locked=True, rel_pct=10.0, note="the reference data's band for the top wall's bubble")
     return {
         "xr_over_s": QuantitySpec(
             key="xr_over_s",
@@ -140,7 +140,7 @@ def _specs(variant: str) -> dict[str, QuantitySpec]:
             reference=GARTLING.reference(row["lower_reattachment"]["x_over_s"], unit="S",
                                          where=f"Tables II and III, the lower-wall reattachment x = "
                                                f"{row['lower_reattachment']['x_over_h']:.2f} H"),
-            tolerance=Tolerance(rel_pct=7.0, note="the reference data's band: the literature's scatter is about 6 %"),
+            tolerance=Tolerance(locked=True, rel_pct=7.0, note="the reference data's band: the literature's scatter is about 6 %"),
         ),
         "xs_top_over_s": QuantitySpec(
             key="xs_top_over_s",

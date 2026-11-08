@@ -18,6 +18,7 @@ same geometry, fluid, BCs and mesh; only the study's turbulence model and the ru
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from typing import Any
 
 import numpy as np
@@ -94,10 +95,22 @@ _REF = Reference(
         "0.0212, and the data scatter about ±1.5 %."
     ),
 )
-_BAND = Tolerance(rel_pct=10.0, note="the reference data's band for RANS with wall functions (an engineering judgement)")
+_BAND = Tolerance(locked=True, rel_pct=10.0,
+                  note="the reference data's band for RANS with wall functions (an engineering judgement)")
+# The variants whose values stay report-only although the tolerances were locked (2026-11-07,
+# after Daniel reviewed the second full run of the whole set), with why: they are compared and
+# shown with the same band, and give no pass or fail until the limit is fixed (validation/README.md,
+# "k-omega SST on Standard's tetrahedra"). Taking a variant out of here locks its band.
+REPORT_ONLY = {"standard_sst": "known limit of k-omega SST on Standard's tetrahedra"}
 
 
-def _specs() -> dict[str, QuantitySpec]:
+def _band(variant: str | None) -> Tolerance:
+    why = REPORT_ONLY.get(variant or "", "")
+    return replace(_BAND, locked=False, report_only=why) if why else _BAND
+
+
+def _specs(variant: str | None = None) -> dict[str, QuantitySpec]:
+    band = _band(variant)
     return {
         "f": QuantitySpec(
             key="f",
@@ -111,7 +124,7 @@ def _specs() -> dict[str, QuantitySpec]:
             ),
             source="route:/api/plot-over-path",
             reference=_REF,
-            tolerance=_BAND,
+            tolerance=band,
         ),
         "f_tau": QuantitySpec(
             key="f_tau",
@@ -124,12 +137,18 @@ def _specs() -> dict[str, QuantitySpec]:
             ),
             source="case_file:<latest>/wallShearStress",
             reference=_REF,
-            tolerance=_BAND,
+            tolerance=band,
         ),
     }
 
 
+# The case's quantities (the report lists their references); each variant's own bands: quantities().
 QUANTITIES = _specs()
+_BY_VARIANT = {v: _specs(v) for v in VARIANTS}
+
+
+def quantities(variant: str) -> list[QuantitySpec]:
+    return list(_BY_VARIANT[variant].values())
 
 # k-epsilon's walls (nutkWallFunction) switch to the log law at y+ 11.53; on the clean developed
 # wedge of 2026-11-06 they read f +4.8 % at y+ 10.2 and -4.8 % at y+ 11.6 (4.2 to 4.9 % low from
@@ -202,6 +221,11 @@ def _note_standard_sst(by: dict[str, dict[str, Any]]) -> str | None:
     text += (" This is a limitation, not fixed: from an inlet, k-omega SST reads a pipe's friction low on Standard's "
              "tetrahedra (the probes of 2026-11-07 read it 11 to 18 % low with wall layers, and why is not shown: the "
              "validation README, \"k-omega SST on Standard's tetrahedra\").")
+    why = (qs[0].get("tolerance") or {}).get("report_only")
+    if why:
+        text += (f" So its two values are report-only ({why}): the tolerances were locked on 2026-11-07, after "
+                 "Daniel reviewed the second full run of the whole set, and these two are compared and shown with "
+                 "their band and error but give no pass or fail until the limit is fixed.")
     hex_errs = [(_q(by.get("hexdominant_sst") or {}, k).get("error") or {}).get("rel_pct") for k in ("f", "f_tau")]
     if all(isinstance(e, (int, float)) for e in hex_errs):
         text += (f" On Hex-dominant the same model and walls read f {hex_errs[0]:+.2f} % and f_tau {hex_errs[1]:+.2f} %: "
@@ -427,12 +451,13 @@ def evaluate(plan: dict[str, Any], raw: Any) -> dict[str, Any]:
     probes = raw.probe_values("Centreline", component=0)
     if probes:
         series["probes"] = {"x_m": [p[0] for p in probes], "Ux_m_s": [p[1] for p in probes]}
+    specs = _BY_VARIANT[str(plan["variant"])]
     rows = [
-        compare(QUANTITIES["f"], f, detail=f_detail,
+        compare(specs["f"], f, detail=f_detail,
                 uncertainty=({"kind": "pct", "value": shown["f_unc_pct"],
                               "what": "the slope's standard error and 2.5 times the cross-section's"}
                              if "f_unc_pct" in shown else None)),
-        compare(QUANTITIES["f_tau"], f_tau, detail=tau_detail),
+        compare(specs["f_tau"], f_tau, detail=tau_detail),
     ]
     return {"quantities": rows, "series": series, "shown": shown, "warnings": warnings}
 
