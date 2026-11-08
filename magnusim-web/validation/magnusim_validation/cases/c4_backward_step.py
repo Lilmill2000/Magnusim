@@ -58,9 +58,9 @@ RHO = 1.0
 NU = {v: U * 2.0 * g["h"] / 1000.0 / RE[v] for v, g in GEOM.items()}
 # The mesh: Hex-dominant at fineness 10 (its finest): the part is about 35 to 40 times longer than
 # high, and its background block keeps at least 8 cells across the height, so a lower fineness
-# makes the background cells several times longer than high (fineness 5: 5 to 6 times, 10:
-# 1.7 to 1.9); then one custom size on every wall with Refine out to half the height, so the whole
-# channel is meshed at that size's level.
+# makes the background cells longer than high (fineness 5: 3 times, the most Hex-dominant allows
+# since 2026-11-07, 5 to 6 before it; 10: 1.7 to 1.9); then one custom size on every wall with
+# Refine out to half the height, so the whole channel is meshed at that size's level.
 FINENESS = 10
 CELL_MM = 0.3
 # Iteration limits (each run should stop on its residual targets of 1e-6 before them).
@@ -265,10 +265,11 @@ NOTES = (
     "The mesh is Hex-dominant at fineness 10 with one custom size of 0.3 mm on every wall and Refine out to half the "
     "height, so every cell of the channel has that size's level (4): cells 0.17 to 0.20 mm along x and 0.10 mm "
     "across (S/26 to S/28 along, S/47 to S/48 across). No wall layers: the cells are that fine up to the walls. "
-    "Fineness 10 because the part is long and thin (35 to 40 times longer than high, an app gap of Hex-dominant): its "
-    "background block keeps at least 8 cells across the height (170 × 8 here) while it sizes them along the length "
-    "from the part's diagonal, so at fineness 5 its cells would be 5 to 6 times longer than high (54 × 8), at 10 "
-    "about 1.7 to 1.9.",
+    "Fineness 10 because the part is long and thin (35 to 40 times longer than high): its background block keeps at "
+    "least 8 cells across the height (170 × 8 here) while it sizes them along the length from the part's diagonal, "
+    "about 1.7 to 1.9 times longer than high at fineness 10. At fineness 5 they would be 3 times longer than high "
+    "(94 to 107 × 8): since 2026-11-07 Hex-dominant keeps every background cell within 3 times as long as wide; "
+    "before that they were 5 to 6 times (54 × 8), an app gap, which is why the case was built at fineness 10.",
     lambda by: _note_checkmesh(by),
     lambda by: _note_mesh_moves(by),
     lambda by: _note_simplec(by),

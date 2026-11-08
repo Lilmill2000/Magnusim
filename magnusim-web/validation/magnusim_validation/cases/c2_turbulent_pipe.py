@@ -5,7 +5,8 @@ A 20 mm pipe 600 mm (30 D) long, a uniform velocity inlet of 1 m/s (its turbulen
 0.07 D), a 0 Pa outlet and a no-slip wall; a custom fluid with nu = 4e-7 m²/s and rho = 1 kg/m³,
 so Re = U D / nu = 50 000. The reference data ask for the friction at least 40 D from the inlet,
 or with a cyclic or mapped inlet; this case meets neither (the app has no cyclic inlet, gap G9,
-and the pipe is 30 D because Hex-dominant cannot mesh one much longer cleanly: ``NOTES``). The
+and the pipe is 30 D, the length its bands were locked on: when the case was built Hex-dominant
+could not mesh one much longer cleanly, ``NOTES``). The
 friction factor is read over x/D 20 to 25, 5 D clear of the outlet; its slope over x/D 15 to 20
 is shown beside it, and a run whose two differ by more than ``DEVELOPING_PCT`` carries a
 warning: its flow is still developing where f is read, so f is not yet its developed value (above
@@ -246,14 +247,16 @@ NOTES = (
     "reads below its developed value (the probes of 2026-11-06: 2.6 to 3.6 % below on Hex-dominant, against a "
     "mapped inlet that holds the developed flow), from 10 % and 0.1 D it read above it. On Standard the slope over "
     "5 D moved by about 2 % between two meshes of the same settings while the wall shear stress agreed within "
-    "0.2 %, so a warning there can come from the mesh as much as from the flow. The pipe is not longer because "
-    "Hex-dominant cannot mesh a much "
-    "longer pipe cleanly (an app gap): its "
-    "background block keeps at least 8 and 12 cells across the pipe while its cells along the pipe grow with the "
-    "length, so the cells near the wall get long and flat. On the mesh probes (2026-11-05) a 55 D pipe at fineness 6 "
-    "had 25 196 faces over 65 degrees non-orthogonal before snapping, and its mesh failed checkMesh (8 cells of "
-    "negative volume) although Generate finished; a 40 D pipe at fineness 7 kept 0.03 of its 2 wall layers and "
-    "failed checkMesh too; the 30 D pipe at fineness 6 passes (its worst face 65 degrees).",
+    "0.2 %, so a warning there can come from the mesh as much as from the flow. The pipe is 30 D, the length its "
+    "bands were locked on, because when the case was built Hex-dominant could not mesh a much longer pipe cleanly "
+    "(an app gap): its background block kept at least 8 and 12 cells across the pipe while its cells along the pipe "
+    "grew with the length, so the cells near the wall got long and flat. On the mesh probes (2026-11-05) a 55 D pipe "
+    "at fineness 6 had 25 196 faces over 65 degrees non-orthogonal before snapping, and its mesh failed checkMesh "
+    "(8 cells of negative volume) although Generate finished; a 40 D pipe at fineness 7 kept 0.03 of its 2 wall "
+    "layers and failed checkMesh too. Since 2026-11-07 Hex-dominant keeps every background cell within 3 times as "
+    "long as wide, and a Hex-dominant mesh that fails checkMesh ends Generate failed: the 55 D pipe at fineness 6 "
+    "passes checkMesh (its worst face 65.7 degrees), and this 30 D pipe meshes on an 80 × 8 × 12 block where it had "
+    "67 × 8 × 12.",
     "Two readings of the same friction: the pressure drop along the axis, and the wall shear stress the run saved. "
     "In a settled, developed flow they are equal (the force balance -dp/dx = 4 tau_w / D); a gap between them is a "
     "finding about the solution, not about the reading.",

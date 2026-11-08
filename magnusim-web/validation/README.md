@@ -154,7 +154,7 @@ their citations; this list is what those modules must start from.
 
 | Case | What the reference data set |
 |---|---|
-| 2, turbulent pipe, Re 5e4 | Built (`c2_turbulent_pipe.py`). f = 0.0211 (McKeon et al. 2005, eq. 3.5), band ±10 % with wall functions (±5 % if y+ < 1). The reference data ask for f at least 40 D from the inlet (turbulent development is about 20 D), or a cyclic or mapped inlet. This case meets neither: the app has no cyclic inlet (G9) and Hex-dominant cannot mesh a pipe much longer than 30 D cleanly (below), so the pipe is 30 D and f is read over x/D 20 to 25, with the slope over 15 to 20 beside it; a run whose two differ by more than 1 % carries a warning (still developing there, so not yet its developed value; from the Auto inlet it reads below it: Development at 20 to 25 D, below). |
+| 2, turbulent pipe, Re 5e4 | Built (`c2_turbulent_pipe.py`). f = 0.0211 (McKeon et al. 2005, eq. 3.5), band ±10 % with wall functions (±5 % if y+ < 1). The reference data ask for f at least 40 D from the inlet (turbulent development is about 20 D), or a cyclic or mapped inlet. This case meets neither: the app has no cyclic inlet (G9), and when the case was built Hex-dominant could not mesh a pipe much longer than 30 D cleanly (below; fixed 2026-11-07, but the case keeps the 30 D its bands were locked on), so the pipe is 30 D and f is read over x/D 20 to 25, with the slope over 15 to 20 beside it; a run whose two differ by more than 1 % carries a warning (still developing there, so not yet its developed value; from the Auto inlet it reads below it: Development at 20 to 25 D, below). |
 | 3, lid-driven cavity, Re 100 and 1000 | Built (`c3_lid_cavity.py`, one cell across). Ghia et al. (1982) Tables I and II (`refs/ghia_1982_*.csv`, with the one correction at x = 0.9063, Re 1000: -0.51550); extrema within 3 % of Botella and Peyret (1998, `refs/botella_peyret_1998_extrema.csv`), the profiles' largest difference at most 0.03 U, the primary vortex centre within 0.01 L and psi_min within 2 % of Marchi et al. (2009, `refs/marchi_2009_vortex.csv`). |
 | 4, backward-facing step | Built (`c4_backward_step.py`, one cell across). Re_D 100 on Armaly et al.'s expansion ratio 1.942 against their Fig. 14, x1/S = 3.00, ±10 % (the flow turns three-dimensional near Re 400, so not the design's Re 389; `refs/armaly_1983_fig14_x1.csv`); Re_D 800 on expansion ratio 2 against Gartling (1990), x_r/S = 12.20, ±7 %, and the top wall's bubble (9.70 and 20.96 S, ±10 %; `refs/gartling_1990_re800.csv`), the literature's scatter beside it (`refs/bfs_re800_scatter.csv`); the outlet 30 H after the step; a uniform inlet with an upstream channel of 10 h or 10 H (no profile inlet). Read from the wall shear stress the run saved on the floor and the top, U_x 0.02 S from the wall as the cross-check. Re_D 800 solves with SIMPLEC: with SIMPLE it never settled. |
 | 5, cylinder | Built (`c5_cylinder.py`, one cell across). Re 20 and 40 steady against Cd 2.02 and 1.50 and L/D 0.93 and 2.24 (±5 %, `refs/cylinder_re20_re40.csv`; the literature's spread in `refs/cylinder_steady_scatter.csv`); Re 100 transient against St 0.164 (±3 %), the mean Cd 1.33 (±5 %), CL rms 0.23 (±15 %) and the mean L/D 1.41 (±10 %; `refs/cylinder_re100.csv`, `refs/cylinder_re100_scatter.csv`). The domain the reference data ask for: 40 D wide (blockage 2.5 %), 15 D upstream and 30 D downstream, one Freestream round it; a Forces monitor on the cylinder with the study's reference values; 300 D/U of run, the shedding read by the harness over whole periods after the transient (at least 20; G8). How much a coarser and a finer mesh (the probes of 2026-11-06) move the reported values: the case's notes in `VALIDATION.md`, worked out from its results. |
@@ -171,18 +171,20 @@ App gaps found so far, and what they block:
   harness reads cell values with the app's own loader (`sampling.cells`) or samples a line as
   the route does with the components kept (`sampling.line`, checked against the route's own
   program in `tests/test_sampling.py`, and against its answer in every cavity run).
-- **Long thin parts on Hex-dominant** (case 2): its background block keeps at least 8 and 12
-  cells across the part's two small axes while its cells along the long one grow with the
-  length, so the cells near the wall come out long and flat. A 55 D pipe at fineness 6 had
-  25 196 faces over 65 degrees non-orthogonal before snapping and failed checkMesh (8 cells
+- **Long thin parts on Hex-dominant** (case 2), fixed 2026-11-07: its background block kept at
+  least 8 and 12 cells across the part's two small axes while its cells along the long one grew
+  with the length, so the cells near the wall came out long and flat. A 55 D pipe at fineness 6
+  had 25 196 faces over 65 degrees non-orthogonal before snapping and failed checkMesh (8 cells
   of negative volume) although Generate finished; a 40 D pipe at fineness 7 kept 0.03 of its
-  two wall layers. A 30 D pipe at fineness 6 meshes (its worst face at 65 degrees). In 2D
-  (case 4, a channel 35 to 40 times longer than high) the same rule keeps 8 background cells
-  across the height while the cells along it come from the diagonal: 5 to 6 times longer than
-  high at fineness 5 (54 × 8), 1.7 to 1.9 at fineness 10 (170 × 8), so the step meshes at
-  fineness 10, and both meshes pass checkMesh (their worst faces in `VALIDATION.md`). The smallest fix:
-  size the background block's cells from the smallest of the part's extents (or keep them
-  square) instead of a fixed minimum count across it.
+  two wall layers. Now every background cell is at most 3 times as long as it is wide, and a
+  Hex-dominant mesh that fails checkMesh ends Generate failed with its failed checks named: the
+  55 D pipe at fineness 6 gets a 147 × 8 × 12 block and passes checkMesh (its worst face at
+  65.7 degrees). Case 2 stays 30 D, the length its bands were locked on; its Hex-dominant block
+  went from 67 × 8 × 12 to 80 × 8 × 12. In 2D (case 4, a channel 35 to 40 times longer than
+  high) the block keeps 8 background cells across the height, with the cells along it now at
+  most 3 times longer than high (fineness 5: 94 to 107 × 8, where it was 54 × 8 and 5 to 6
+  times); at fineness 10 (170 × 8, 1.7 to 1.9 times) it is unchanged, so the step's meshes are
+  the same, and both pass checkMesh (their worst faces in `VALIDATION.md`).
 - **Point probes**, fixed: they read the value at the point (`interpolationScheme cellPoint`),
   not the value of the cell that holds it.
 - **Refine out to** (cases 4 to 6), added: Surface custom sizing's "Refine out to" keeps the
