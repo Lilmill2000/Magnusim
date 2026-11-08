@@ -198,7 +198,7 @@ App gaps found so far, and what they block:
   there, so the ends snap onto them: 314.0 mm² on the 30 D and the 55 D pipe (the 55 D pipe's
   were 312.4), the wall and the cross-section within 0.15 %. The cap is not needed for it: a
   pipe whose block the cap leaves alone has cells up to 3 times their side across too (a 25 D
-  pipe at fineness 6 with physics-based meshing off: its ends 334.7 mm², +6.5 %; case 1's pipe
+  pipe at fineness 6 with physics-based meshing off: its ends 331.7 mm², +5.6 %; case 1's pipe
   at fineness 4: 0.6 % small), so since then the ends move along any axis whose cells are more
   than 1.06 times the side across (1.79 at fineness 1 to 3), and both come out 314.0 mm². Case
   1's Hex-dominant block is one: it keeps its 67 × 8 × 12, its ends 0.34 mm outside the pipe's

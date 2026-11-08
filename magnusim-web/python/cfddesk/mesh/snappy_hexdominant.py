@@ -200,7 +200,7 @@ def cell_limit_refusal(fineness: int, bounds_m: dict[str, float] | None, *, two_
 # 1.26 mm inside the pipe, and the slanted ring round it made its inlet 344 mm² for the disc's
 # 314 (2026-11-08, snappyHexMesh v2606). The cap is not needed for it: a 20 x 500 mm pipe at
 # fineness 6 with physics-based meshing off (block (67 8 12), which the cap leaves alone, the
-# walls' level 1) kept its inlet's centre 1.87 mm inside and its ends 334.7 mm² (+6.5 %), and a
+# walls' level 1) kept its inlet's centre 1.87 mm inside and its ends 331.7 mm² (+5.6 %), and a
 # 20 x 300 mm pipe at fineness 4 (42 8 12) points up to 0.63 mm inside and its ends 0.6 % small
 # (2026-11-08, tests/wsl/test_mesh_wsl.py W9).
 # So along such an axis (``end_plane_axes``) the block keeps its count, but its two ends move

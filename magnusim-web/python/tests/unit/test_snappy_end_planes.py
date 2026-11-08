@@ -25,7 +25,7 @@ steps on them; ``tests/wsl/test_mesh_wsl.py`` W6 and W8 mesh the pipes and check
 
 The cap is not needed for it. A pipe the cap leaves alone has cells up to 3 times as long as
 their side across too: a 20 x 500 mm pipe at fineness 6 with physics-based meshing off (67 8 12,
-the walls' level 1) kept its inlet's centre 1.87 mm inside and its ends 334.7 mm² (+6.5 %), and a
+the walls' level 1) kept its inlet's centre 1.87 mm inside and its ends 331.7 mm² (+5.6 %), and a
 20 x 300 mm pipe at fineness 4 (42 8 12) points up to 0.63 mm inside (W9, 2026-11-08). So every
 axis whose cells are long against the longer side across is aligned (``end_plane_axes``), not
 only the one the cap lengthened. A block whose cells are about as long as wide keeps its corners,

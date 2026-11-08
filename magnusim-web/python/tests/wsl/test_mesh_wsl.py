@@ -36,7 +36,7 @@ These run the same command lines to the end (``pytest -m wsl``, minutes each):
 - W9 Hex-dominant on pipes whose block the cap leaves alone but whose cells are still long
   against their side across: the 20 mm pipe 500 mm long (25 D) at fineness 6 with
   physics-based meshing off (67 8 12, the walls' level 1) kept its inlet's centre 1.87 mm
-  inside the pipe and its ends 334.7 mm² for 314.16 (+6.5 %), and case 1's 300 mm pipe at
+  inside the pipe and its ends 331.7 mm² for 314.16 (+5.6 %), and case 1's 300 mm pipe at
   fineness 4 (42 8 12) points up to 0.63 mm inside and its ends 0.6 % small (6c515bc6, which
   aligned only the cap's axis; 2026-11-08). With every such axis aligned
   (``snappy_hexdominant.end_plane_axes``) both are the part's shape, as W6.

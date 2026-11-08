@@ -28,7 +28,7 @@
 // - With WSL: a 25 D pipe (20 mm across, 500 mm long) at fineness 6 with Physics-based meshing
 //   off. The cap leaves its block alone (67 8 12), but its cells are still 3 times as long as
 //   their side across, and on 6c515bc6 (which moved only the cap's axis) its inlet's centre
-//   stayed 1.87 mm inside the pipe and each end came out 334.7 mm² for the disc's 314.2 (+6.5 %;
+//   stayed 1.87 mm inside the pipe and each end came out 331.7 mm² for the disc's 314.2 (+5.6 %;
 //   python/tests/wsl/test_mesh_wsl.py W9), and the Inlet card read Flow rate 0.332 L/s in. Now
 //   every axis whose cells are long against their side across gets its ends just outside the
 //   part's planes: the card reads 0.314 L/s in, as for case 2's pipe.
