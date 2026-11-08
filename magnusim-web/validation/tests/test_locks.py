@@ -88,7 +88,8 @@ def test_a_locked_value_outside_its_band_fails_the_report_and_its_check(tmp_path
     assert "<td class=\"num out\">±10 % (outside)</td><td class=out>FAIL</td>" in page
     q = next(q for q in json.loads((p["site_dir"] / "results.json").read_text(encoding="utf-8"))["results"][0]["quantities"]
              if q["key"] == "f")
-    assert q["verdict"] == "fail" and q["verdict_at_run"] == "report_only" and q["tolerance"]["locked"] is True
+    # The run's own verdict stays beside it: the committed run's (it ran on the locked bands, inside them).
+    assert q["verdict"] == "fail" and q["verdict_at_run"] == "pass" and q["tolerance"]["locked"] is True
     # Its check says so too, with the texts up to date.
     assert build_all(check=True, **p) == 1
     err = capsys.readouterr().err
@@ -164,8 +165,9 @@ def test_a_new_run_is_judged_by_the_locks_when_it_is_evaluated(tmp_path: Path):
 
 
 def test_the_committed_results_pass_under_the_locks():
-    """The second full run (commit 977c1480): 46 values pass their locked bands, the two of k-omega SST on
-    Standard are report-only, and the lock moved no band."""
+    """The committed run (the fourth full run, commit 678cbdbd, the first on the locked bands): 46 values
+    pass their locked bands, the two of k-omega SST on Standard are report-only, the lock moved no band,
+    and each run's own verdict is the one the locks give."""
     results = load_results()
     rows = _table(build_markdown(results))
     assert len(rows) == 48
@@ -177,7 +179,7 @@ def test_the_committed_results_pass_under_the_locks():
     for res, done in zip(results, judged, strict=True):
         for q, j in zip(res["quantities"], done["quantities"], strict=True):
             assert (j["tolerance"]["rel_pct"], j["tolerance"]["abs_tol"]) == (q["tolerance"]["rel_pct"], q["tolerance"]["abs_tol"])
-            assert j["within"] is q["within"] and j["verdict_at_run"] == q["verdict"] == "report_only"
+            assert j["within"] is q["within"] and j["verdict_at_run"] == q["verdict"] == j["verdict"]
             assert j["verdict"] == ("pass" if j["tolerance"]["locked"] else "report_only")
     # Judging judged results again gives the same.
     assert locks.judge(judged) == (judged, [])
@@ -244,7 +246,7 @@ def test_a_locked_value_from_a_run_that_did_not_end_ok_fails(tmp_path: Path, cap
     assert "<td class=out>FAIL: its run did not end ok (solve failed)</td>" in page and "<td class=in>pass</td>" not in page
     site = json.loads((p["site_dir"] / "results.json").read_text(encoding="utf-8"))["results"]
     assert {(q["verdict"], q["verdict_at_run"]) for r in site for q in r["quantities"] if r["case"] != "c2_turbulent_pipe"} == {
-        ("fail", "report_only")}
+        ("fail", "pass")}
     assert build_all(check=True, **p) == 1
     assert "so its value cannot pass" in capsys.readouterr().err
 
