@@ -188,7 +188,13 @@ App gaps found so far, and what they block:
   pipe past the reach its snap has, which the short side across sets. Since 2026-11-08 the block
   keeps its counts but its ends along the lengthened axis sit just outside the part's two planes
   there, so the ends snap onto them: 314.0 mm² on the 30 D and the 55 D pipe (the 55 D pipe's
-  were 312.4), the wall and the cross-section within 0.15 %. In 2D (case 4, a channel 35 to 40 times longer than
+  were 312.4), the wall and the cross-section within 0.15 %. The cap is not needed for it: a
+  pipe whose block the cap leaves alone has cells up to 3 times their side across too (a 25 D
+  pipe at fineness 6 with physics-based meshing off: its ends 334.7 mm², +6.5 %; case 1's pipe
+  at fineness 4: 0.6 % small), so since then the ends move along any axis whose cells are more
+  than 1.06 times the side across (1.79 at fineness 1 to 3), and both come out 314.0 mm². Case
+  1's Hex-dominant block is one: it keeps its 67 × 8 × 12, its ends 0.34 mm outside the pipe's
+  planes, and its committed result is from the mesh before. In 2D (case 4, a channel 35 to 40 times longer than
   high) the block keeps 8 background cells across the height, with the cells along it now at
   most 3 times longer than high (fineness 5: 94 to 107 × 8, where it was 54 × 8 and 5 to 6
   times); at fineness 10 (170 × 8, 1.7 to 1.9 times) it is unchanged, so the step's meshes are
