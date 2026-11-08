@@ -61,7 +61,7 @@ y+ was recorded, not in the table): Hex-dominant at fineness 7 (293 760 cells) r
 (fineness 6: −20.55 %). With those walls Standard's tetrahedra read low whatever the cell
 count; the checks were not run again with the new walls.
 
-Results of 2026-11-07 (Heat Transfer 0.2.0, OpenFOAM v2606 (build _481094f-20260618)). The commit that holds them is in the repository's history.
+Results of 2026-11-08 (Heat Transfer 0.2.0, OpenFOAM v2606 (build _481094f-20260618)). The commit that holds them is in the repository's history.
 
 ## Results
 
@@ -73,15 +73,15 @@ Results of 2026-11-07 (Heat Transfer 0.2.0, OpenFOAM v2606 (build _481094f-20260
 | de Vahl Davis cavity, Ra = 1e4 | Nu_max (hot wall) | 3.528 | 3.522 | -0.17 % | Hex-dominant | 105 518 | 2000 |
 | de Vahl Davis cavity, Ra = 1e5 | Nu-bar (mean of the hot and cold walls) | 4.519 | 4.494 ± 0.00 % | -0.55 % | Hex-dominant | 105 518 | 2500 |
 | de Vahl Davis cavity, Ra = 1e5 | Nu_max (hot wall) | 7.717 | 7.611 | -1.37 % | Hex-dominant | 105 518 | 2500 |
-| de Vahl Davis cavity, Ra = 1e6 | Nu-bar (mean of the hot and cold walls) | 8.800 | 8.743 ± 0.88 % | -0.64 % | Hex-dominant | 196 640 | 4000 |
+| de Vahl Davis cavity, Ra = 1e6 | Nu-bar (mean of the hot and cold walls) | 8.800 | 8.738 ± 1.01 % | -0.71 % | Hex-dominant | 196 640 | 4000 |
 | de Vahl Davis cavity, Ra = 1e6 | Nu_max (hot wall) | 17.93 | 17.06 | -4.83 % | Hex-dominant | 196 640 | 4000 |
-| Laminar pipe, fixed wall heat flux (10 W/m²) | Nu (fully developed) | 4.364 | 4.361 ± 1.45 % | -0.06 % | Hex-dominant | 124 648 | 3000 |
-| Laminar pipe, fixed wall heat flux (10 W/m²) | Nu (fully developed) | 4.364 | 4.968 ± 0.18 % | +13.84 % | Standard | 139 158 | 3000 |
-| Laminar pipe, fixed wall temperature (30 °C, inlet 20 °C) | Nu (fully developed) | 3.657 | 3.646 ± 1.75 % | -0.29 % | Hex-dominant | 124 210 | 3000 |
-| Laminar pipe, fixed wall temperature (30 °C, inlet 20 °C) | Nu (fully developed) | 3.657 | 4.135 ± 0.35 % | +13.08 % | Standard | 139 209 | 3000 |
-| Turbulent pipe, fixed wall heat flux (1000 W/m²) | Nu (17.5 to 22.5 D from the inlet) | 106.9 | 105.2 ± 0.15 % | -1.61 % | Hex-dominant | 59 736 | 2000 |
-| Turbulent pipe, fixed wall heat flux (1000 W/m²) | Nu (17.5 to 22.5 D from the inlet) | 106.9 | 107.3 ± 0.45 % | +0.34 % | Standard | 36 219 | 2000 |
-| Composite wall (steel 10 mm, stainless steel 20 mm) | Heat through the wall (W) | 5.338 | 5.343 | +0.11 % | Hex-dominant | 13 634 | 600 |
+| Laminar pipe, fixed wall heat flux (10 W/m²) | Nu (fully developed) | 4.364 | 4.363 ± 1.30 % | -0.02 % | Hex-dominant | 124 794 | 3000 |
+| Laminar pipe, fixed wall heat flux (10 W/m²) | Nu (fully developed) | 4.364 | 4.968 ± 0.20 % | +13.83 % | Standard | 139 209 | 2845 |
+| Laminar pipe, fixed wall temperature (30 °C, inlet 20 °C) | Nu (fully developed) | 3.657 | 3.648 ± 1.59 % | -0.25 % | Hex-dominant | 124 794 | 3000 |
+| Laminar pipe, fixed wall temperature (30 °C, inlet 20 °C) | Nu (fully developed) | 3.657 | 4.137 ± 0.28 % | +13.13 % | Standard | 139 150 | 3000 |
+| Turbulent pipe, fixed wall heat flux (1000 W/m²) | Nu (17.5 to 22.5 D from the inlet) | 106.9 | 105.0 ± 0.12 % | -1.78 % | Hex-dominant | 59 648 | 2000 |
+| Turbulent pipe, fixed wall heat flux (1000 W/m²) | Nu (17.5 to 22.5 D from the inlet) | 106.9 | 107.3 ± 0.46 % | +0.31 % | Standard | 36 219 | 2000 |
+| Composite wall (steel 10 mm, stainless steel 20 mm) | Heat through the wall (W) | 5.338 | 5.343 | +0.11 % | Hex-dominant | 13 620 | 600 |
 | Heated block (stainless steel, 10 W, h = 500 W/(m²·K)) | Heat out (W) | 10.00 | 10.00 | +0.00 % | Hex-dominant | 12 576 | 800 |
 | Heated block (stainless steel, 10 W, h = 500 W/(m²·K)) | Highest temperature rise (K) | 14.60 | 14.60 | +0.03 % | Hex-dominant | 12 576 | 800 |
 
@@ -114,7 +114,7 @@ Reference: G. de Vahl Davis, Natural convection of air in a square cavity: a ben
 square cavity L = 0.1 m as a 40 mm slab (symmetry on both faces), ΔT = 10 K, Pr = 0.71, β ΔT = 0.01 (Boussinesq), laminar, buoyantSimpleFoam, Accurate numerics.
 Reference: G. de Vahl Davis, Natural convection of air in a square cavity: a bench mark numerical solution, Int. J. Numer. Methods Fluids 3 (1983) 249-264, Table IV.
 
-- Nu-bar (mean of the hot and cold walls) on Hex-dominant: 8.743 ± 0.88 % against 8.800 (-0.64 %); mesh: Hex-dominant fineness 5, 5 layers on the hot and cold walls; hot wall 8.8200 (de Vahl Davis's hot-wall Nu_0 8.817), cold wall 8.6665: 1.76 % apart, half of it the ± here; the mean moved 0.060 % over the last fifth of the iterations; layers: cold 5 of 5 layers, 100 % of the thickness; hot 5 of 5 layers, 100 % of the thickness.
+- Nu-bar (mean of the hot and cold walls) on Hex-dominant: 8.738 ± 1.01 % against 8.800 (-0.71 %); mesh: Hex-dominant fineness 5, 5 layers on the hot and cold walls; hot wall 8.8265 (de Vahl Davis's hot-wall Nu_0 8.817), cold wall 8.6494: 2.03 % apart, half of it the ± here; the mean moved 0.075 % over the last fifth of the iterations; layers: cold 5 of 5 layers, 100 % of the thickness; hot 5 of 5 layers, 100 % of the thickness.
 - Nu_max (hot wall) on Hex-dominant: 17.06 against 17.93 (-4.83 %); mesh: Hex-dominant fineness 5, 5 layers on the hot and cold walls; at y/L = 0.0330 (reference 0.0378, 0.0048 off), read on the faces of the slab's middle half between y/L 0.01 and 0.99 (not the corner faces); layers: cold 5 of 5 layers, 100 % of the thickness; hot 5 of 5 layers, 100 % of the thickness.
 
 ### Forced convection
@@ -123,22 +123,22 @@ Reference: G. de Vahl Davis, Natural convection of air in a square cavity: a ben
 pipe D = 20 mm, L = 300 mm, air with constant properties (Pr = 0.731), Re = 100 (uniform inlet 0.0758 m/s at 20 °C), gravity off, laminar, buoyantSimpleFoam; Nu the mean of ten 10 mm slices from x = 150 to 250 mm (x / (D Re Pr) from 0.10), its ± the standard error of that mean.
 Reference: R. K. Shah and A. L. London, Laminar Flow Forced Convection in Ducts, Academic Press (1978), circular duct, fully developed.
 
-- Nu (fully developed) on Hex-dominant: 4.361 ± 1.45 % against 4.364 (-0.06 %); mesh: Hex-dominant fineness 6, 4 layers on the wall; slices 155 mm: 4.408, 165 mm: 4.187, 175 mm: 4.297, 185 mm: 4.651, 195 mm: 4.224, 205 mm: 4.174, 215 mm: 4.624, 225 mm: 4.255, 235 mm: 4.170, 245 mm: 4.624 (lowest 4.170, highest 4.651); at 205 mm T_wall 299.454 K, T_bulk 297.548 K (mixing cup), q 10.000 W/m²; layers: heated 3.6 of 4 layers, 90.4 % of the thickness.
-- Nu (fully developed) on Standard: 4.968 ± 0.18 % against 4.364 (+13.84 %); mesh: Standard fineness 6, layers on; slices 155 mm: 4.895, 165 mm: 4.992, 175 mm: 4.979, 185 mm: 4.973, 195 mm: 4.996, 205 mm: 4.971, 215 mm: 4.956, 225 mm: 4.969, 235 mm: 4.965, 245 mm: 4.981 (lowest 4.895, highest 4.996); at 205 mm T_wall 299.219 K, T_bulk 297.619 K (mixing cup), q 10.000 W/m²; layers applied: yes.
+- Nu (fully developed) on Hex-dominant: 4.363 ± 1.30 % against 4.364 (-0.02 %); mesh: Hex-dominant fineness 6, 4 layers on the wall; slices 155 mm: 4.409, 165 mm: 4.232, 175 mm: 4.179, 185 mm: 4.643, 195 mm: 4.240, 205 mm: 4.240, 215 mm: 4.491, 225 mm: 4.247, 235 mm: 4.282, 245 mm: 4.668 (lowest 4.179, highest 4.668); at 205 mm T_wall 299.458 K, T_bulk 297.582 K (mixing cup), q 10.000 W/m²; layers: heated 3.58 of 4 layers, 89.9 % of the thickness.
+- Nu (fully developed) on Standard: 4.968 ± 0.20 % against 4.364 (+13.83 %); mesh: Standard fineness 6, layers on; slices 155 mm: 4.889, 165 mm: 4.991, 175 mm: 4.990, 185 mm: 4.976, 195 mm: 5.001, 205 mm: 4.965, 215 mm: 4.952, 225 mm: 4.959, 235 mm: 4.990, 245 mm: 4.965 (lowest 4.889, highest 5.001); at 205 mm T_wall 299.221 K, T_bulk 297.618 K (mixing cup), q 10.000 W/m²; layers applied: yes.
 
 **Laminar pipe, fixed wall temperature (30 °C, inlet 20 °C).**
 pipe D = 20 mm, L = 300 mm, air with constant properties (Pr = 0.731), Re = 100 (uniform inlet 0.0758 m/s at 20 °C), gravity off, laminar, buoyantSimpleFoam; Nu the mean of ten 10 mm slices from x = 150 to 250 mm (x / (D Re Pr) from 0.10), its ± the standard error of that mean.
 Reference: R. K. Shah and A. L. London, Laminar Flow Forced Convection in Ducts, Academic Press (1978), circular duct, fully developed.
 
-- Nu (fully developed) on Hex-dominant: 3.646 ± 1.75 % against 3.657 (-0.29 %); mesh: Hex-dominant fineness 6, 4 layers on the wall; slices 155 mm: 3.671, 165 mm: 3.478, 175 mm: 3.566, 185 mm: 3.936, 195 mm: 3.519, 205 mm: 3.462, 215 mm: 3.920, 225 mm: 3.528, 235 mm: 3.462, 245 mm: 3.921 (lowest 3.462, highest 3.936); at 205 mm T_wall 303.150 K, T_bulk 302.147 K (mixing cup), q 4.366 W/m²; layers: heated 3.58 of 4 layers, 89.8 % of the thickness.
-- Nu (fully developed) on Standard: 4.135 ± 0.35 % against 3.657 (+13.08 %); mesh: Standard fineness 6, layers on; slices 155 mm: 4.046, 165 mm: 4.156, 175 mm: 4.171, 185 mm: 4.134, 195 mm: 4.193, 205 mm: 4.113, 215 mm: 4.109, 225 mm: 4.132, 235 mm: 4.194, 245 mm: 4.105 (lowest 4.046, highest 4.194); at 205 mm T_wall 303.150 K, T_bulk 302.439 K (mixing cup), q 3.676 W/m²; layers applied: yes.
+- Nu (fully developed) on Hex-dominant: 3.648 ± 1.59 % against 3.657 (-0.25 %); mesh: Hex-dominant fineness 6, 4 layers on the wall; slices 155 mm: 3.676, 165 mm: 3.523, 175 mm: 3.464, 185 mm: 3.937, 195 mm: 3.512, 205 mm: 3.524, 215 mm: 3.798, 225 mm: 3.523, 235 mm: 3.573, 245 mm: 3.947 (lowest 3.464, highest 3.947); at 205 mm T_wall 303.150 K, T_bulk 302.165 K (mixing cup), q 4.365 W/m²; layers: heated 3.58 of 4 layers, 89.9 % of the thickness.
+- Nu (fully developed) on Standard: 4.137 ± 0.28 % against 3.657 (+13.13 %); mesh: Standard fineness 6, layers on; slices 155 mm: 4.046, 165 mm: 4.165, 175 mm: 4.146, 185 mm: 4.146, 195 mm: 4.175, 205 mm: 4.130, 215 mm: 4.113, 225 mm: 4.148, 235 mm: 4.141, 245 mm: 4.162 (lowest 4.046, highest 4.175); at 205 mm T_wall 303.150 K, T_bulk 302.439 K (mixing cup), q 3.691 W/m²; layers applied: yes.
 
 **Turbulent pipe, fixed wall heat flux (1000 W/m²).**
 pipe D = 20 mm, L = 500 mm, air with constant properties (Pr = 0.731), Re = 50 000 (uniform inlet 37.89 m/s at 20 °C, the inlet's default turbulence), gravity off, k-omega SST with wall functions (no layers), buoyantSimpleFoam; Nu the mean of five 20 mm slices from x = 350 to 450 mm (17.5 to 22.5 D after the uniform inlet: the flow is still developing there, and a developing flow's Nu is above the developed one, so the developed value would read lower still).
 Reference: V. Gnielinski, New equations for heat and mass transfer in turbulent pipe and channel flow, Int. Chem. Eng. 16 (1976) 359-368, with Petukhov's friction factor.
 
-- Nu (17.5 to 22.5 D from the inlet) on Hex-dominant: 105.2 ± 0.15 % against 106.9 (-1.61 %); mesh: Hex-dominant fineness 6, no layers; wall y+ in the slices 13.77 to 58.01 (mean 27.95); slices 360 mm: 104.939, 380 mm: 105.002, 400 mm: 105.094, 420 mm: 105.809, 440 mm: 105.232 (lowest 104.939, highest 105.809); at 400 mm T_wall 302.419 K, T_bulk 294.849 K, q 1000.00 W/m². k-omega SST's walls take Spalding's law with stepwise omega (Incompressible Flow's walls, since the validation set's fix of 2026-11-06; before it, nutkWallFunction read this pipe 10 to 20 % low); Gnielinski's own scatter is about ±10 %.
-- Nu (17.5 to 22.5 D from the inlet) on Standard: 107.3 ± 0.45 % against 106.9 (+0.34 %); mesh: Standard fineness 6, no layers; wall y+ in the slices 54.1 to 166.73 (mean 91.42); slices 360 mm: 106.385, 380 mm: 108.845, 400 mm: 107.630, 420 mm: 106.172, 440 mm: 107.497 (lowest 106.172, highest 108.845); at 400 mm T_wall 302.241 K, T_bulk 294.849 K, q 1000.03 W/m². k-omega SST's walls take Spalding's law with stepwise omega (Incompressible Flow's walls, since the validation set's fix of 2026-11-06; before it, nutkWallFunction read this pipe 10 to 20 % low); Gnielinski's own scatter is about ±10 %; layers applied: no.
+- Nu (17.5 to 22.5 D from the inlet) on Hex-dominant: 105.0 ± 0.12 % against 106.9 (-1.78 %); mesh: Hex-dominant fineness 6, no layers; wall y+ in the slices 13.77 to 58.01 (mean 27.96); slices 360 mm: 104.858, 380 mm: 104.920, 400 mm: 104.748, 420 mm: 105.282, 440 mm: 105.404 (lowest 104.748, highest 105.404); at 400 mm T_wall 302.421 K, T_bulk 294.826 K, q 1000.00 W/m². k-omega SST's walls take Spalding's law with stepwise omega (Incompressible Flow's walls, since the validation set's fix of 2026-11-06; before it, nutkWallFunction read this pipe 10 to 20 % low); Gnielinski's own scatter is about ±10 %.
+- Nu (17.5 to 22.5 D from the inlet) on Standard: 107.3 ± 0.46 % against 106.9 (+0.31 %); mesh: Standard fineness 6, no layers; wall y+ in the slices 54.1 to 166.59 (mean 91.4); slices 360 mm: 106.300, 380 mm: 108.820, 400 mm: 107.593, 420 mm: 106.135, 440 mm: 107.492 (lowest 106.135, highest 108.820); at 400 mm T_wall 302.242 K, T_bulk 294.848 K, q 999.99 W/m². k-omega SST's walls take Spalding's law with stepwise omega (Incompressible Flow's walls, since the validation set's fix of 2026-11-06; before it, nutkWallFunction read this pipe 10 to 20 % low); Gnielinski's own scatter is about ±10 %; layers applied: no.
 
 ### Conduction (CHT)
 
@@ -146,7 +146,7 @@ Reference: V. Gnielinski, New equations for heat and mass transfer in turbulent 
 two solids 10 x 10 mm across, steel (k 63.9) 10 mm and stainless steel 304 (k 14.9) 20 mm, 100 °C and 20 °C on their outer faces, every other face adiabatic; chtMultiRegionSimpleFoam.
 Reference: 1D conduction through two layers in series, q = ΔT / (L1/k1 + L2/k2).
 
-- Heat through the wall (W) on Hex-dominant: 5.343 against 5.338 (+0.11 %); mesh: Hex-dominant fineness 3; heat out 5.34346 W; every cell within 0.48 % of ΔT of the 1D profile.
+- Heat through the wall (W) on Hex-dominant: 5.343 against 5.338 (+0.11 %); mesh: Hex-dominant fineness 3; heat out 5.34344 W; every cell within 0.48 % of ΔT of the 1D profile.
 
 **Heated block (stainless steel, 10 W, h = 500 W/(m²·K)).**
 stainless steel 304 block 40 x 40 x 10 mm, 10 W spread evenly, its bottom cooled by h = 500 W/(m²·K) to 20 °C, every other face adiabatic; chtMultiRegionSimpleFoam (one region).

@@ -47,10 +47,14 @@ ok) fails `npm run test:validation`, `npm run validation:report` and its `--chec
 committed-report pytest), and blocks a release. 46 of the 48 values have a locked band; case 2's two with k-omega SST on the Standard
 mesher (f and f_tau) are report-only until that limit is fixed: compared and shown with their
 error, never a failure. Heat Transfer's own set has no bands and stays report-only. The report
-shows that second full run of all six cases (2026-11-07, commit 977c1480, OpenFOAM v2606, 71.9
-minutes), after two fixes to the case writer's schemes and walls that the first (2026-11-06,
-commit aaabb531, 57.7 minutes) led to (`validation/README.md`), with Heat Transfer's set run
-from the same commit. Its meshes were not exactly the same from one generate to
+shows the fourth full run of all six cases, the first on the locked bands (2026-11-08, commit
+678cbdbd, OpenFOAM v2606, 8 cores, `MAGNUSIM_TEST_MESH_RANKS=8`, 71.1 minutes), with Heat
+Transfer's set run from the same commit: every locked value passes. The second (2026-11-07,
+commit 977c1480, 71.9 minutes), the one the bands were locked on, came after two fixes to the
+case writer's schemes and walls that the first (2026-11-06, commit aaabb531, 57.7 minutes) led
+to; the third was stopped when case 2's Hex-dominant pipe failed its bands, and Hex-dominant's
+ends were fixed before the fourth (`validation/README.md`). Up to the second, the meshes were
+not exactly the same from one generate to
 the next (snappyHexMesh and gmsh in parallel), so a rerun could move a value a little: case 1's
 development length about 1 %, case 2's Standard friction under 1 %. Since 2026-11-07 the WSL
 scripts run scotch, which splits a mesh into ranks, on one thread (on several it split the same

@@ -108,15 +108,23 @@ and its project is still on the server, and otherwise meshes its own.
   (`npm run validation:report`, `-- --check`: `locks.py` judges every committed value against its
   case's band now; a locked value from a run that did not end ok reads FAIL with why, and a band
   or a reference changed since its run fails too), so it blocks a release; a
-  report-only value never fails. `results/` holds the second full run of all six cases and every
-  variant (2026-11-07, commit 977c1480 with no changes, OpenFOAM v2606, 8 cores, one run at a
-  time, 71.9 minutes), after the two fixes below (Standard's laminar friction and k-omega SST at
-  the wall), with Heat Transfer's own set run from the same commit after it: 46 of its 48
-  compared values inside their bands (the 46 locked), the two outside k-omega SST's friction on
-  Standard (f -14.25 % and f_tau -17.05 %: a limitation, below; the two report-only). Its
-  `result.json` files keep the verdicts their evaluation gave before the lock (`report_only`); the
-  report and the page show the locks' (`verdict_at_run` beside it in the page's `results.json`).
-  Heat Transfer's own set has no bands and stays report-only. The
+  report-only value never fails. `results/` holds the fourth full run of all six cases and every
+  variant, the first on the locked bands (2026-11-08, commit 678cbdbd with no changes, OpenFOAM
+  v2606, 8 cores and the mesher on 8 ranks, one run at a time, 71.1 minutes), with Heat
+  Transfer's own set run from the same commit after it: every locked value inside its band, and
+  k-omega SST's friction on Standard, report-only, at f -14.25 % and f_tau -17.06 % (a
+  limitation, below). Its `result.json` files hold the verdicts their evaluation gave (`pass`,
+  and `report_only` for those two); the report and the page show the locks' (`verdict_at_run`
+  beside it in the page's `results.json`). The second full run, the one Daniel reviewed
+  (2026-11-07, commit 977c1480, 71.9 minutes, after the two fixes below: Standard's laminar
+  friction and k-omega SST at the wall; in git's history), had 46 of its 48 inside and the same
+  two outside. Against it the fourth moved no value by more than 0.28 points: case 2's k-omega
+  SST on Hex-dominant f from -4.14 to -3.86 % and f_tau from -3.06 to -2.78 % (its mesh's ends
+  now on their planes, below), case 1 on Hex-dominant f Re from -1.25 to -1.31 % and its
+  development length from -2.12 to -2.01 %, every other value by 0.03 points or less. The third
+  (2026-11-08, from ce6aa3eb) was stopped after 4 of its 15 runs when case 2's k-omega SST on
+  Hex-dominant failed its locked bands (f +23.4 %, f_tau +14.1 %: its inlet and outlet off their
+  planes, below). Heat Transfer's own set has no bands and stays report-only. The
   first full run (2026-11-06, commit aaabb531, 57.7 minutes; in git's history) had 43 of its 48
   inside. Against it the second moved case 1's Standard f Re from +15.99 to +0.03 % (its
   development length from -5.53 to -0.19 %), case 2's k-omega SST on Hex-dominant from f
@@ -194,7 +202,8 @@ App gaps found so far, and what they block:
   at fineness 4: 0.6 % small), so since then the ends move along any axis whose cells are more
   than 1.06 times the side across (1.79 at fineness 1 to 3), and both come out 314.0 mm². Case
   1's Hex-dominant block is one: it keeps its 67 × 8 × 12, its ends 0.34 mm outside the pipe's
-  planes, and its committed result is from the mesh before. In 2D (case 4, a channel 35 to 40 times longer than
+  planes (its committed result, the fourth full run, is on that mesh: f Re -1.31 %, where the
+  mesh before read -1.25 %). In 2D (case 4, a channel 35 to 40 times longer than
   high) the block keeps 8 background cells across the height, with the cells along it now at
   most 3 times longer than high (fineness 5: 94 to 107 × 8, where it was 54 × 8 and 5 to 6
   times); at fineness 10 (170 × 8, 1.7 to 1.9 times) it is unchanged, so the step's meshes are
