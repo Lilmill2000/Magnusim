@@ -1264,8 +1264,10 @@ class HealthTracker:
             if len(vals) == STALL_SMOOTH:
                 total -= vals[0]
             vals.append(v)
-            # The running sum, summed afresh once per window so its rounding never builds up.
-            total = sum(vals) if cur.n % STALL_SMOOTH == 0 else total + v
+            # The running sum, summed afresh once per window so its rounding never builds up (math.fsum:
+            # correctly rounded, so the mean, and the panel's figure, are the same on every Python; sum()
+            # rounds differently from 3.12 on, and a mean on a rounding tie read 0.0017 or 0.0016).
+            total = math.fsum(vals) if cur.n % STALL_SMOOTH == 0 else total + v
             self._resid_sum[f] = total
             mean = total / len(vals)
             samples = self.stall_samples.setdefault(f, deque(maxlen=11))

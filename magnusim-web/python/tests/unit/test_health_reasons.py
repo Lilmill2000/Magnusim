@@ -186,7 +186,7 @@ def _swing(hi: float, lo: float, period: int, end: int = 1500) -> list[str]:
 
 @pytest.mark.parametrize(
     "hi,lo,period,mean",
-    [(3e-3, 3e-4, 2, "0.0017"), (5e-3, 1.5e-4, 2, "0.0026"), (1e-2, 1e-4, 2, "0.005"), (3e-3, 3e-4, 10, "0.0017"), (3e-3, 3e-4, 20, None)],
+    [(3e-3, 3e-4, 2, "0.0016"), (5e-3, 1.5e-4, 2, "0.0026"), (1e-2, 1e-4, 2, "0.005"), (3e-3, 3e-4, 10, "0.0016"), (3e-3, 3e-4, 20, None)],
 )
 def test_a_residual_that_swings_wide_without_falling_reads_watch_closely(hi: float, lo: float, period: int, mean: str | None):
     """omega swinging 3-10x over the 1e-3 floor and as far under it, never falling: the mean of
@@ -213,7 +213,7 @@ def test_the_swing_log_reads_watch_closely_with_its_stall_row():
     assert [(e["t"], e["verdict"]) for e in rec["timeline"]] == [(6.0, "healthy"), (600.0, "watch")]
     assert [(f["code"], f["level"], f["since_t"]) for f in rec["findings"]] == [("residuals_stalled", "warn", 600.0), ("not_settled", "info", None)]
     assert rec["findings"][0]["text"] == (
-        "The omega residual has not halved in 500 iterations (about 0.0017, from 0.0017); a steady run's residuals should keep falling."
+        "The omega residual has not halved in 500 iterations (about 0.0016, from 0.0016); a steady run's residuals should keep falling."
     )
     assert w.bare == []
 

@@ -384,7 +384,7 @@ test.describe('a verdict always says why', () => {
     const stall = {
       code: 'residuals_stalled',
       level: 'warn',
-      text: "The omega residual has not halved in 500 iterations (about 0.0017, from 0.0017); a steady run's residuals should keep falling.",
+      text: "The omega residual has not halved in 500 iterations (about 0.0016, from 0.0016); a steady run's residuals should keep falling.",
     };
     const settled = { code: 'not_settled', level: 'info', text: 'It ended without its residuals meeting their targets: its results may not have settled.' };
     await expect.poll(() => rowsOf(panel), STEP).toEqual([stall, settled]);
