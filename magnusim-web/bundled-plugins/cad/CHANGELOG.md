@@ -2,7 +2,7 @@
 
 What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
 
-## Unreleased (0.2.0-dev)
+## 0.2.0 (2026-11-09, with Magnusim 0.5.0)
 
 **Hole makes counterbores, countersinks, drill points, fastener sizes and threads (issue #7).**
 - SOLID > Hole has **Size**: Custom diameter, **Clearance hole for a bolt** (a

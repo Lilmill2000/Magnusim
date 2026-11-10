@@ -1,6 +1,6 @@
 key = "cad"
 name = "Magnusim CAD"
-version = "0.2.0-dev"
+version = "0.2.0"
 # 1.7: Edit in CAD (geometry_actions below): a project geometry imported as STEP,
 # IGES or BREP opens in a Part (ws.context.geometry, ws.project.geometrySource and
 # geometryFaces), and its first update goes back into that geometry with its setup
@@ -10,7 +10,7 @@ version = "0.2.0-dev"
 # 1.5: a Part links its design into the project as a geometry
 # (ws.project.linkGeometry, links_geometry below). 1.3: the workspace imports the
 # host's UI kit (@magnusim/plugin-ui). 1.2: ws.files and nav.setDirty.
-api_version = "1.7"
+api_version = "1.9"
 tier = "bundled"
 required = false
 # Ships on (Daniel's D33): an optional bundled plugin, on by default. Settings >

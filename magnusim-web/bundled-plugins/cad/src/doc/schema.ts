@@ -7,7 +7,7 @@ import type { PlaneRef } from '../types/references';
 import type { DocUnits, LengthUnit } from '../types/units';
 import { newId } from '../lib/ids';
 
-export const PLUGIN_VERSION = '0.2.0-dev';
+export const PLUGIN_VERSION = '0.2.0';
 export const DEFAULT_BODY_COLOR = '#bdc9db';
 export const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 

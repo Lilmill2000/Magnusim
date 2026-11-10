@@ -1,6 +1,6 @@
 # Heat Transfer
 
-A bundled Magnusim plugin (version `0.1.0`, host API 1.8, GPL-3.0-or-later): the
+A bundled Magnusim plugin (version `0.2.0`, host API 1.8, GPL-3.0-or-later): the
 temperature and flow of one fluid heated or cooled through its walls and inlets, with
 buoyancy (natural convection) or without it (forced convection), and heat conducted
 through solid bodies (conjugate heat transfer, CHT). It ships turned on and

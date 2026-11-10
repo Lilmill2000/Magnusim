@@ -1,3 +1,112 @@
+Magnusim 0.5.0
+
+Install and run as before: Setup.bat, then run.bat (see START-HERE.txt).
+There was no 0.4.0: everything planned for it ships here. The Airfoil plugin
+still ships off (Settings -> Plugins turns it on).
+
+What changed since 0.3.0
+
+The Assistant
+- A model you choose works in Magnusim through the app's own tools: a cloud
+  provider with your own key, a local server on this PC, or a coding agent you
+  already use. Its settings are in Settings -> Assistant; the small Assistant
+  button in the bottom-right corner opens its panel.
+- From Home, the workbench and a CAD Part it can do the whole modelling chain:
+  create projects, import a geometry you attach, read faces and bodies, set up
+  a study (materials, boundary conditions), mesh, run, and read the results as
+  numbers. It moves your window as your own clicks do and takes pictures of
+  the view.
+- It asks before anything that starts a computation or can't be undone; one
+  question can cover "mesh, then run". What it changes shows at once in the
+  open window.
+- Run health: ask it whether a run is healthy, or whether a run you are about
+  to start would have problems. The Run panel has a Health block, and Start
+  gives a check before you solve (Courant number, mesh quality, settings).
+- In CAD it builds in the open Part (sketches, features, edits), and whatever
+  it can do there you can do too.
+- Not yet: the Results view's own controls (cut planes, traces, iso surfaces,
+  animation, compare), saving a view, and the Airfoil and 2D Wind Tunnel
+  workspaces. It says so when asked (docs/releases/v0.5.0.md).
+
+Heat Transfer 0.2.0 (a new bundled plugin; on, Settings -> Plugins turns it
+off)
+- Temperature with the flow: a Heat Transfer study (steady or transient)
+  solves buoyant flow (natural convection with gravity on, forced convection
+  with it off), and conjugate heat transfer when a body has a solid material
+  (aluminium, copper, steel, brass, FR-4, glass, ABS, PLA or your own). A solid
+  can make heat (W, or W/m3).
+- Thermal boundary conditions: an inlet's temperature; a wall adiabatic, at a
+  fixed temperature, with a heat flux, or with a heat transfer coefficient to
+  an ambient temperature. Faces between bodies are coupled on their own.
+- Results: temperature in every body, wall heat flux and the heat transfer
+  coefficient; monitors for wall heat flux, surface temperatures,
+  thermocouples and the energy balance of every run (heat in, heat out).
+- A sample: New project -> Open a sample... -> Heat sink (an aluminium sink
+  with 10 W in an air channel): Generate the mesh, then Start.
+- Checked against published results: bundled-plugins/heat_transfer/
+  VALIDATION.md. Limits: one fluid per study, constant properties, no
+  radiation; on a Standard mesh the heat through walls is less accurate, so
+  mesh with Hex-dominant for heat numbers (the study panel says so).
+
+2D Wind Tunnel 0.1.0 (a new bundled plugin; on)
+- A real-time 2D wind tunnel solved on the GPU as you watch (it needs a
+  WebGPU browser). Set the wind and the fluid, drop in NACA airfoils (or a
+  .dat file), shapes or bodies you sketch with CAD's sketcher, and drag them
+  around while the flow responds: vorticity, velocity and pressure, tracer
+  particles, forces on each body.
+- Start it from New project, or the Wind tunnel button in the header.
+
+Incompressible Flow 1.2.0
+- Force on picked faces: Result control -> Surface data -> Force gives the
+  force, its pressure and viscous parts, drag, lift and side force, the
+  moment and the coefficients on exactly the faces you pick.
+- More of OpenFOAM in the study: forces, probes, extra fields, boundary
+  conditions and turbulence models, initial conditions, numerics (schemes,
+  relaxation, correctors, Max Courant), convergence controls, and Continue a
+  stopped run.
+- A stopped run's solve settings can be changed: Magnusim asks before it
+  overwrites the results. A finished run stays locked, and changing it offers
+  a new run with the same settings.
+- A steady run's particle traces no longer show in another study's view.
+
+Magnusim CAD 0.2.0 (was 0.1.0)
+- Hole with counterbores, countersinks, drill points, fastener sizes and
+  cosmetic threads; Extrude with a draft angle; see-through bodies; a section
+  view on any plane; copy and paste sketch geometry; import SVG or DXF into a
+  sketch; Find and Delete faces pick fillets and holes by shape and size.
+- Many sketching fixes after your first round with it, and the fixes for
+  Magnusim-CAD issues #7 and #14-#17. The full list:
+  bundled-plugins/cad/CHANGELOG.md.
+
+Meshing
+- Meshing has a Stop, in the Mesh panel and the tree.
+- Hex-dominant: a long, thin part keeps its cells square enough to pass
+  checkMesh, and a part's end faces line up with the background cells. A mesh
+  that fails checkMesh ends Generate failed, naming the checks, and a run
+  will not start on it.
+
+The window
+- Settings is one window with its sections on the left (Units, This PC,
+  Port, Workspace, Appearance, Keybinds, Assistant, Plugins). Every change saves as you
+  make it.
+- Appearance: light, dark or Match the system, and text and icon sizes.
+  Pictures, recordings and thumbnails you keep stay light.
+- Home's header is Settings and New project. New project is where a project
+  starts: geometry to import, a design (CAD Part), a 2D wind tunnel or a
+  sample.
+
+Checked against textbook results
+- A validation set runs six classic cases through the app (laminar and
+  turbulent pipes, lid-driven cavity, backward-facing step, cylinder,
+  sphere) and compares them with published data: magnusim-web/validation/
+  README.md. A release is held if a locked value leaves its band.
+
+Plugin authors
+- Host API 1.9 (docs/plugins/compatibility.md): plugin sample projects,
+  a default mesher per analysis, run health events, the pre-run check, the
+  appearance a workspace page gets, and more.
+
+
 Magnusim 0.3.0
 
 Install and run as before: Setup.bat, then run.bat (see START-HERE.txt).
