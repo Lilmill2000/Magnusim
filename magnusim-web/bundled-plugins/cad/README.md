@@ -585,8 +585,7 @@ A Part is **linked** to one geometry of its project. There is no export step:
 
 ## The Assistant in the Part
 
-*In development: this needs Magnusim's Assistant, which comes with Magnusim
-0.5.0 and is not released yet.*
+*This needs Magnusim's Assistant, which comes with Magnusim 0.5.0.*
 
 Magnusim's Assistant works with a model you choose in **Settings > Assistant**:
 a cloud provider with your own key, or a local server on this PC. While a Part
@@ -859,9 +858,8 @@ workspace while a change is not saved yet. (The document still falls back to
 layout uses the host's per-user plugin prefs (`ws.prefs`) when the host has them,
 else it is kept per project (ARCHITECTURE.md §7 "Toolbar").
 
-The Assistant's tools (in development) use `ws.assistant` from the app's host API
-1.9, which is not released yet: the host still reports 1.8, and the manifest
-stays at 1.7. `assistantOf` in `src/lib/bridge.ts` finds it in the SDK the host
+The Assistant's tools use `ws.assistant` from the app's host API 1.9 (the
+manifest declares 1.9). `assistantOf` in `src/lib/bridge.ts` finds it in the SDK the host
 served, and so do the newer parts the tools use when they are there (an error's
 hint and detail, a result's summary, the turn events and Stop, a call that waits
 for the person, the delete's confirm note). On a host without `ws.assistant` the

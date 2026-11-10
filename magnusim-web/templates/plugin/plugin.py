@@ -9,7 +9,7 @@ from cfddesk.registry.manifest import PluginManifest
 
 PLUGIN = "template-demo"
 # The host API this plugin is written for: the same as api_version in manifest.toml.
-API_VERSION = "1.8"
+API_VERSION = "1.9"
 
 
 def register(hub):

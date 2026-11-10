@@ -67,7 +67,7 @@ export function pluginUiDtsPath(webRoot: string): string {
 /**
  * What a workspace builds against: the bridge and kit versions, the React it gets, the import map,
  * and the app's own keys (src/keybinds/appCommands.ts APP_KEYS: app, local, reserved), whose app and
- * reserved keys a workspace command may not take (unreleased, 1.9).
+ * reserved keys a workspace command may not take (1.9).
  */
 export function pluginSdkInfo(webRoot: string): {
   sdk_version: string;

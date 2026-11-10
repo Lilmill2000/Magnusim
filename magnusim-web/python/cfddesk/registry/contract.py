@@ -38,7 +38,7 @@ from typing import Any, Literal, TypeGuard
 
 from cfddesk.registry.monitor import MonitorQuantity
 
-CONTRACT_VERSION = "1.5"
+CONTRACT_VERSION = "1.6"
 
 KeepFrames = Literal["all", "latest"]
 XAxis = Literal["iterations", "seconds"]

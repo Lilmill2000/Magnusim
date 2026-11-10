@@ -61,7 +61,7 @@ export function factsOf(t: AssistantTurn): TurnFacts {
 
 /**
  * The conversation a turn runs in: AssistantTurn.conversation, the same for every turn of one chat
- * (unreleased 1.9, not in the SDK's types yet: read defensively), or null when the host names none.
+ * (1.9, not in the SDK's types yet: read defensively), or null when the host names none.
  */
 export function conversationOf(t: AssistantTurn): string | null {
   const c = (t as { conversation?: unknown }).conversation;

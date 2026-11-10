@@ -2,7 +2,7 @@
 // API churn is absorbed here. Frozen shape (scaffold); INTEGRATE adds wrappers
 // when the host gains APIs (host API 1.2: ws.files, nav.setDirty, focus on
 // connect; 1.5: linking a geometry; 1.6: the exit hook; 1.7: ws.prefs, and
-// Edit in CAD: the geometry a Part edits, its source and its faces; unreleased 1.9:
+// Edit in CAD: the geometry a Part edits, its source and its faces; 1.9:
 // ws.assistant, the tools the Part offers the app's Assistant, and its panel's keys, and the
 // host's appearance, ws.context.appearance and its 'appearance' event; Magnusim CAD's welcome
 // flag ws.context.projectLinks, false where there are no projects and no simulation).
@@ -32,7 +32,7 @@ import type { EditedGeometry, EditLaunch, GeometryFaces, GeometrySource, Origina
 export type ToastKind = 'info' | 'success' | 'error';
 
 /**
- * The host's appearance (unreleased 1.9: ws.context.appearance, and the 'appearance' event with
+ * The host's appearance (1.9: ws.context.appearance, and the 'appearance' event with
  * the same object): the theme as resolved ('system' already decided), the person's choice, and
  * the text and icon scales (Settings offers 0.9, 1, 1.15 and 1.3, and 0.85, 1, 1.25 and 1.5). The
  * SDK writes data-theme, data-theme-pref, --mg-text-scale and --mg-icon-scale on the frame's
@@ -140,7 +140,7 @@ export interface Bridge {
   /**
    * The host has projects to link the Part into, and so a simulation: true in Magnusim. Magnusim
    * CAD (the desktop edition: no projects, no simulations) says false in its welcome
-   * (ws.context.projectLinks, unreleased 1.9); absent, as on Magnusim and older hosts,
+   * (ws.context.projectLinks, 1.9); absent, as on Magnusim and older hosts,
    * it is true. Read once. False: the Part shows no simulation control and the Assistant offers
    * none; a body's stored choice stays in the document.
    */
@@ -168,7 +168,7 @@ export interface Bridge {
   /**
    * Destructive confirms only: the host's button is always red. `guard`: Yes takes a deliberate
    * click only (disabled at first, never Enter); `safe`: Enter answers Cancel. Hosts before the
-   * unreleased 1.9 ignore both (a plain confirm).
+   * 1.9 ignore both (a plain confirm).
    */
   confirm(opts: ConfirmOptions & { guard?: boolean; safe?: boolean }): Promise<boolean>;
   prompt(opts: PromptOptions): Promise<string | null>;
@@ -191,10 +191,10 @@ export interface Bridge {
    * older host, which has no exit hook (a 1.5 host also refuses the call with `not_allowed`).
    */
   onLeave: ((handler: LeaveHandler | null) => Promise<void>) | null;
-  /** The app's Assistant (unreleased 1.9, `ws.assistant`); null on a host whose SDK has none. */
+  /** The app's Assistant (1.9, `ws.assistant`); null on a host whose SDK has none. */
   assistant: CadAssistantBridge | null;
   /**
-   * The keys of the app's Assistant panel the person chose in Settings → Keybinds (unreleased 1.9,
+   * The keys of the app's Assistant panel the person chose in Settings → Keybinds (1.9,
    * ws.context.assistantKeys): their combos as the host sent them, [] when they left it no key;
    * null for its default (Ctrl+/ by the character "/"), and on an older host. Read live.
    */
@@ -222,7 +222,7 @@ export function versionAtLeast(v: unknown, major: number, minor: number): boolea
 }
 
 /**
- * `ws.assistant` when the SDK the host served has it (unreleased 1.9). Not gated on hostVersion:
+ * `ws.assistant` when the SDK the host served has it (1.9). Not gated on hostVersion:
  * the host reports 1.8 until 1.9 is released, and the SDK it serves has `assistant` exactly when
  * its bridge answers the calls. Its turn events (onTurn, stop) are feature-detected apart.
  */
@@ -267,7 +267,7 @@ export function createBridge(ws: Workspace): Bridge {
   ws.on('units', (u) => {
     units = u;
   });
-  // The Assistant panel's keys (unreleased 1.9): the welcome's context.assistantKeys, then each
+  // The Assistant panel's keys (1.9): the welcome's context.assistantKeys, then each
   // change the host sends (the `assistantKeys` event). A host whose welcome has no assistantKeys
   // has no such keys and sends no event: the default, as before.
   let assistantKeys = assistantKeysOf(ws.context.assistantKeys);
@@ -282,7 +282,7 @@ export function createBridge(ws: Workspace): Bridge {
       console.warn('[cad] the assistantKeys event is not heard; the keys the Part opened with apply', err);
     }
   }
-  // Feature detection (unreleased 1.9: the host's appearance): the context has `appearance`, and
+  // Feature detection (1.9: the host's appearance): the context has `appearance`, and
   // the SDK sends each change as 'appearance'. An older host has neither: light, scale 1.
   const withAppearance = ws.context as typeof ws.context & { appearance?: unknown };
   const hasAppearance = !!withAppearance.appearance && typeof withAppearance.appearance === 'object';

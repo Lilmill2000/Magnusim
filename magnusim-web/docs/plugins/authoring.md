@@ -4,13 +4,12 @@ A plugin adds or replaces one aspect of the workbench. Drop a folder in `plugins
 
 Start with `npm run plugin:new -- <key> [--workspace|--analysis]` from `magnusim-web/` ([GUIDE.md](GUIDE.md), "Quick start"). It writes a plugin that passes `npm run plugin:check`, with its tests. `templates/plugin/` and `templates/plugin-workspace/` are what it is made from: read them as examples, do not copy them (their keys are not yours).
 
-## Manifest 1.8
-
+## Manifest 1.9
 ```toml
 key = "my-plugin"
 name = "My plugin"
 version = "0.1.0"
-api_version = "1.8"
+api_version = "1.9"
 license = "GPL-3.0-or-later"
 description = "What this plugin adds"
 authors = "Your Name"
@@ -341,7 +340,7 @@ await ws.study.update({ last_alpha: 4 }, study.rev);   // refused if another tab
 
 - **Imports.** The host puts an import map in your page for `react`, `react-dom/client`, `react/jsx-runtime`, `@magnusim/workspace` and `@magnusim/plugin-ui` (the UI kit, below). Import those names; do not ship your own React. If you bundle your code, mark them external and emit ES modules. The versions are in `docs/plugins/plugin-sdk.json`. For types, copy `docs/plugins/workspace-sdk.d.ts` (and `docs/plugins/plugin-ui.d.ts` for the kit) into your plugin.
 - **Styles.** `/plugin-sdk/theme.css` is loaded before your own CSS: use its `--mg-*` tokens (colours, type, spacing, radii, shadows) so the page matches the app. `/plugin-sdk/plugin-ui.css`, the kit's styles, is loaded after `theme.css`.
-- **Light and dark, and the sizes (unreleased, 1.9).** The person's look in Settings → Appearance reaches your page: the host and the SDK set `data-theme` (`light` or `dark`), `data-theme-pref` and the `--mg-text-scale` and `--mg-icon-scale` scales on your `<html>`, from the first paint on, and again at each change. `theme.css` holds the dark set too, so a page on the tokens turns dark with no code of its own. Keep colours on the tokens rather than writing them out. What you draw on screen yourself (a canvas, a WebGL view, a plot) reads `ws.context.appearance?.theme ?? 'light'` (a host before 1.9 sends no `appearance`, and its pages stay light) and redraws on `ws.on('appearance', …)`. A picture or recording you keep as a file stays light whatever the theme: draw it with light colours read off an element that carries `data-theme="light"`, which takes the light set's tokens, text colour and background. The kit's `Icon` grows with the icon size; size your own icons with `--mg-icon-*` or `--mg-icon-scale`. A page not ready for dark yet stays light with `data-theme="light"` on its `<body>`: declare the tokens you build from `--mg-*` on `:root, [data-theme]` (not on `:root` alone), and read colours off an element inside it, not off `<html>`. `:root { --mg-text-scale: 1 !important; --mg-icon-scale: 1 !important; }` keeps the sizes at 1. Leave `<html>`'s `data-theme` to the SDK.
+- **Light and dark, and the sizes (1.9).** The person's look in Settings → Appearance reaches your page: the host and the SDK set `data-theme` (`light` or `dark`), `data-theme-pref` and the `--mg-text-scale` and `--mg-icon-scale` scales on your `<html>`, from the first paint on, and again at each change. `theme.css` holds the dark set too, so a page on the tokens turns dark with no code of its own. Keep colours on the tokens rather than writing them out. What you draw on screen yourself (a canvas, a WebGL view, a plot) reads `ws.context.appearance?.theme ?? 'light'` (a host before 1.9 sends no `appearance`, and its pages stay light) and redraws on `ws.on('appearance', …)`. A picture or recording you keep as a file stays light whatever the theme: draw it with light colours read off an element that carries `data-theme="light"`, which takes the light set's tokens, text colour and background. The kit's `Icon` grows with the icon size; size your own icons with `--mg-icon-*` or `--mg-icon-scale`. A page not ready for dark yet stays light with `data-theme="light"` on its `<body>`: declare the tokens you build from `--mg-*` on `:root, [data-theme]` (not on `:root` alone), and read colours off an element inside it, not off `<html>`. `:root { --mg-text-scale: 1 !important; --mg-icon-scale: 1 !important; }` keeps the sizes at 1. Leave `<html>`'s `data-theme` to the SDK.
 - **The sandbox.** The page runs in a sandboxed frame with an opaque origin. Its Content-Security-Policy allows scripts, styles, fonts, images and `fetch` only from `/plugin-sdk/` and your own `workspace/` folder, plus `data:` and `blob:` images:
   - No inline `<script>`: put code in module files (the host's own two, its import map and its pre-paint, are allowed by their hashes). Add no CSP of your own (a `<meta>`): both would apply, and yours would have to allow those two hashes too.
   - No `/api/`: use `ws.service`, `ws.data`, `ws.study` and `ws.jobs`.

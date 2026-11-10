@@ -1859,8 +1859,7 @@ with the host once for the page's life, and its chip goes in the dock.
 - The workspace frame is `sandbox="allow-scripts allow-downloads"`
   (the host's `src/workspace/WorkspaceOverlay.tsx:478`): a blob URL on an `<a download>`
   saves a file (STEP export), and a hidden `<input type=file>` opens the picker.
-- Host API 1.9 (unreleased; the host still reports 1.8, and `manifest.toml`
-  stays at `api_version = "1.7"`): `ws.assistant`, the tools a workspace page
+- Host API 1.9 (`manifest.toml` declares `api_version = "1.9"`): `ws.assistant`, the tools a workspace page
   offers the app's Assistant (§12). `assistantOf(ws)` in `src/lib/bridge.ts`
   takes it from the SDK the host served, not from `hostVersion`; with none,
   `bridge.assistant` is null, nothing registers and the Part works as before.

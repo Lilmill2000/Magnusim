@@ -550,7 +550,7 @@
         "forces",
         "probe"
       ],
-      "contract": "1.5",
+      "contract": "1.6",
       "family": {
         "key": "incompressible",
         "label": "Incompressible",
@@ -2051,7 +2051,7 @@
         "forces",
         "probe"
       ],
-      "contract": "1.5",
+      "contract": "1.6",
       "family": {
         "key": "incompressible",
         "label": "Incompressible",
@@ -3484,7 +3484,7 @@
         "ht_surface_temperature",
         "ht_thermocouple"
       ],
-      "contract": "1.5",
+      "contract": "1.6",
       "family": {
         "key": "heat_transfer",
         "label": "Heat transfer",
@@ -4644,7 +4644,7 @@
         "ht_surface_temperature",
         "ht_thermocouple"
       ],
-      "contract": "1.5",
+      "contract": "1.6",
       "family": {
         "key": "heat_transfer",
         "label": "Heat transfer",
@@ -8777,7 +8777,7 @@
     {
       "key": "cad",
       "name": "Magnusim CAD",
-      "version": "0.2.0-dev",
+      "version": "0.2.0",
       "requires": [],
       "provides": {},
       "ui": null,
@@ -8787,7 +8787,7 @@
       ],
       "description": "Parametric parts in their own workspace: sketches with dimensions and constraints, splines, offsets, sketch mirrors and patterns, and edges projected from the model; extrude, revolve, sweep and loft; fillet, chamfer, shell and booleans; linear and circular patterns and mirrors; reference planes, axes and points; an enclosure around the part for CFD; named parameters; and STEP import, editing and export.",
       "source": "bundled",
-      "api_version": "1.7",
+      "api_version": "1.9",
       "overrides": [],
       "tier": "bundled",
       "required": false,

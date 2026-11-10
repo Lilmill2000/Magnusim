@@ -100,7 +100,7 @@ class WorkspaceSpec:
     talks to the app only through the workspace bridge. ``entry`` is an HTML
     file in the plugin's ``workspace/`` folder, which the host serves at
     ``/plugins/<key>/workspace/``. A study kind opens it (``workspace = key``).
-    ``commands`` (unreleased, 1.9) is a .json file in that folder listing the
+    ``commands`` (1.9) is a .json file in that folder listing the
     workspace's commands and their default keys (authoring.md, "Workspace
     commands"), which Settings → Keybinds shows; "" when it has none.
     """

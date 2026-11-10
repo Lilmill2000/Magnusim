@@ -1,4 +1,4 @@
-// Tools for the app's assistant, the bridge's side (unreleased, next host minor 1.9): the page's
+// Tools for the app's assistant, the bridge's side (1.9): the page's
 // assistant.register (shape checks, the app's verdict, the 5 s bound and abandon()), invokeTool
 // (refusals, the stall window that progress and the page's calls in flight hold open, Stop with
 // its 2 s wait, the result's checks and caps, images read to base64), a leave and a closed
@@ -226,11 +226,11 @@ async function outcomeOf(x: { state: { out: AssistantCallOutcome | null } }): Pr
   return x.state.out;
 }
 
-describe('assistant.register (1.9, unreleased)', () => {
-  it('the host stays 1.8 while it is unreleased', async () => {
+describe('assistant.register (1.9)', () => {
+  it('the host says 1.9', async () => {
     const t = await connected();
-    expect(HOST_API_VERSION).toBe('1.8');
-    expect(t.welcome.context.hostVersion).toBe('1.8');
+    expect(HOST_API_VERSION).toBe('1.9');
+    expect(t.welcome.context.hostVersion).toBe('1.9');
     t.end();
   });
 
@@ -304,7 +304,7 @@ describe('assistant.register (1.9, unreleased)', () => {
     expect(checkAssistantTools({ tools: [], guide: 'g'.repeat(5000) }).guide).toHaveLength(4000);
   });
 
-  it('a review (1.9, unreleased): {rounds 1 to 5, prompt}, its prompt keeps its lines; absent when none; any other shape is bad_request', () => {
+  it('a review (1.9): {rounds 1 to 5, prompt}, its prompt keeps its lines; absent when none; any other shape is bad_request', () => {
     expect(checkAssistantTools({ tools: [], review: { rounds: 3, prompt: ' Look again.\r\n\u0007Fix it. ', extra: 1 } })).toEqual({
       tools: [],
       guide: '',
@@ -491,7 +491,7 @@ describe('assistant.register (1.9, unreleased)', () => {
   });
 });
 
-describe('invokeTool (1.9, unreleased)', () => {
+describe('invokeTool (1.9)', () => {
   it('refuses at once: closed with no page, no_tool, busy (covered frame, a call running), leaving, aborted', async () => {
     // A frame whose page never said hello.
     const frame = document.createElement('iframe');
@@ -960,7 +960,7 @@ describe('invokeTool (1.9, unreleased)', () => {
   });
 });
 
-describe('a leave and a closed channel end the call (1.9, unreleased)', () => {
+describe('a leave and a closed channel end the call (1.9)', () => {
   it('beginLeave aborts the call with leaving before the page hears `leave`; its late result is ignored', async () => {
     const t = await connected();
     await t.call('assistant.register', { tools: [ADD] });
@@ -1080,7 +1080,7 @@ describe('a leave and a closed channel end the call (1.9, unreleased)', () => {
   });
 });
 
-describe('the allowlist and the assistant (1.9, unreleased)', () => {
+describe('the allowlist and the assistant (1.9)', () => {
   it("a running leave's stall timer does not count the assistant's messages as its hook's work (NOT_HOOK_WORK)", async () => {
     const h = hooks();
     let verdict: (v: unknown) => void = () => undefined;
@@ -1128,7 +1128,7 @@ describe('the allowlist and the assistant (1.9, unreleased)', () => {
   });
 });
 
-describe("the assistant's turns and the page's Stop (1.9, unreleased)", () => {
+describe("the assistant's turns and the page's Stop (1.9)", () => {
   const TURN: AssistantTurn = {
     id: 't-1',
     state: 'running',
@@ -1271,7 +1271,7 @@ async function sdkConnected(h = hooks()) {
   }
 }
 
-describe('the SDK and the bridge together (1.9, unreleased)', () => {
+describe('the SDK and the bridge together (1.9)', () => {
   const TOOL = ADD as AssistantTool;
   const call = (bridge: WorkspaceBridge) =>
     bridge.invokeTool({ call: 's', turn: 't', tool: 'add', input: { by: 2 }, timeoutS: 60, signal: new AbortController().signal, onProgress: () => undefined });
@@ -1358,7 +1358,7 @@ describe('the SDK and the bridge together (1.9, unreleased)', () => {
   });
 });
 
-describe("undo from the app's Assistant panel, and its key (1.9, unreleased)", () => {
+describe("undo from the app's Assistant panel, and its key (1.9)", () => {
   const RUNNING: AssistantTurn = {
     id: 't-1',
     state: 'running',

@@ -1,4 +1,4 @@
-"""A workspace's commands file (manifest ``[[workspaces]] commands``, unreleased 1.9).
+"""A workspace's commands file (manifest ``[[workspaces]] commands``, 1.9).
 
 The manifest key: discovery takes a .json file in the plugin's workspace/ folder and passes its
 path on in the catalog row; the schema says 1.9 and warns nobody to raise api_version yet. The
@@ -156,18 +156,21 @@ def test_a_commands_file_outside_workspace_never_stops_the_plugin_loading(tmp_pa
     assert f"manifest [[workspaces]]: pad: {why}; its commands are left out of Settings → Keybinds" in row["notes"]
 
 
-def test_the_schema_says_1_9_and_nobody_is_told_to_raise_api_version_yet(tmp_path: Path):
+def test_the_schema_says_1_9_and_a_plugin_naming_commands_is_told_to_raise_api_version(tmp_path: Path):
     built = plugin_manifest_schema.build_schema()
     prop = built["$defs"]["WorkspaceSpec"]["properties"]["commands"]
     assert prop["x-since"] == "1.9" and prop["default"] == ""
-    assert "Unreleased (1.9)" in prop["description"]
+    assert prop["description"].startswith("1.9: ")
     errors, unknown = plugin_manifest_schema.validate({"key": "pad", "title": "Pad", "commands": "workspace/commands.json"}, {"$ref": "#/$defs/WorkspaceSpec"}, built)
     assert errors == [] and unknown == []
     errors, _ = plugin_manifest_schema.validate({"key": "pad", "title": "Pad", "commands": "commands.json"}, {"$ref": "#/$defs/WorkspaceSpec"}, built)
     assert errors
-    # A 1.7 plugin (CAD) that names a commands file: the manifest check passes with no warning.
+    # A 1.7 plugin that names a commands file: a 1.7 host ignores the key, so it is told to raise api_version.
     report = run(make_plugin(tmp_path, manifest_extra=WS, files={**PAGE, "workspace/commands.json": json.dumps(GOOD)}, api="1.7"))
-    assert found(report, "manifest", "warning") == [] and found(report, "api_version", "warning") == [], plugin_check.render(report)
+    assert found(report, "manifest", "warning") == [], plugin_check.render(report)
+    assert found(report, "api_version", "warning") == [
+        "workspaces.commands needs host API 1.9, but api_version is 1.7: a 1.7 host ignores it; raise api_version"
+    ], plugin_check.render(report)
     assert report.checks["workspace"] == "pass", plugin_check.render(report)
 
 
@@ -225,8 +228,9 @@ def test_plugin_check_refuses_one_command_id_in_two_workspaces(tmp_path: Path):
     ]
 
 
-def test_api_version_is_asked_for_only_once_this_host_is_1_9(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_api_version_is_asked_for_by_a_1_9_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     meta = {"api_version": "1.8", "workspaces": [{"key": "pad", "title": "Pad", "commands": "workspace/commands.json"}]}
+    monkeypatch.setattr(plugin_check, "API_VERSION", "1.8")
     assert "workspaces.commands" not in plugin_check._uses(meta)
     monkeypatch.setattr(plugin_check, "API_VERSION", "1.9")
     assert "workspaces.commands" in plugin_check._uses(meta)

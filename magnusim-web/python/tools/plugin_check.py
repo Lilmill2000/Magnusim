@@ -1409,7 +1409,7 @@ def _no_constant(name: str) -> Any:
 
 
 def _check_workspace_commands(plugin: Path, row: dict[str, Any], report: Report, web_root: Path) -> list[dict[str, Any]]:
-    """A workspace's commands file (``commands``, unreleased 1.9): there, JSON, and in the format.
+    """A workspace's commands file (``commands``, 1.9): there, JSON, and in the format.
 
     Returns its commands, for the plugin-wide check of their ids. Read as the app reads it
     (Response.json(): UTF-8, a BOM dropped, no NaN or Infinity)."""

@@ -1,4 +1,4 @@
-// The host's appearance (unreleased 1.9) applied to the Part, in one handler, at the start (the
+// The host's appearance (1.9) applied to the Part, in one handler, at the start (the
 // welcome's look) and on every change:
 //   - the 3D view's palette (src/viewport/palette.ts): DARK with the dark theme, LIGHT otherwise,
 //     on the view now and on every view made later, from its first frame (pictures stay light

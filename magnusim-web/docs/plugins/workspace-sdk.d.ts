@@ -23,7 +23,7 @@ declare module '@magnusim/workspace' {
    * 1.4.0 (host 1.7): ws.prefs, context.geometry and context.launch, ws.project.geometrySource
    * and ws.project.geometryFaces, and linkGeometry's `originalNames` (editing a project geometry).
    */
-  export const SDK_VERSION = "1.4.0";
+  export const SDK_VERSION = "1.5.0";
   /** A project-level study record (plugins/<key>/studies/<sid>/study.json) plus the plugin's own fields. */
   export interface StudyRecord {
       id: string;
@@ -49,14 +49,14 @@ declare module '@magnusim/workspace' {
   export interface ThemeInfo {
       /**
        * The stylesheet's name, 'light' on every host so far: it holds the dark set too, and
-       * context.appearance says which one the page shows (unreleased, 1.9).
+       * context.appearance says which one the page shows (1.9).
        */
       name: 'light';
       /** The stylesheet with the design tokens and base styles the host serves. */
       stylesheet: string;
   }
   /**
-   * The app's look, as the person set it in Settings → Appearance (unreleased, 1.9):
+   * The app's look, as the person set it in Settings → Appearance (1.9):
    * context.appearance, and the `appearance` event after each change. The SDK shows it on this
    * page's <html> itself, before any listener hears it: data-theme (`theme`: theme.css's --mg-*
    * tokens and its color-scheme follow it), data-theme-pref (`preference`), --mg-text-scale and
@@ -111,14 +111,14 @@ declare module '@magnusim/workspace' {
       launch?: LaunchTarget | null;
       /**
        * The app shows its own Assistant panel, which offers the person Stop and "Undo these changes"
-       * for a turn (unreleased, 1.9; absent on an older host). ws.assistant.docked reads it.
+       * for a turn (1.9; absent on an older host). ws.assistant.docked reads it.
        */
       assistantDock?: boolean;
       /**
        * The keys that open and close the app's Assistant panel when the person changed them in
        * Settings → Keybinds: combos as a commands file writes them (Cmd counts as Ctrl), [] when they
        * left it no key. null for its default, Ctrl+/ (Cmd+/ on macOS) on the key that types "/"
-       * (unreleased, 1.9; absent on an older host). The `assistantKeys` event says when they change.
+       * (1.9; absent on an older host). The `assistantKeys` event says when they change.
        * While docked the page leaves these keys to the app (ws.assistant.docked): no command of its own
        * should answer them.
        */
@@ -131,7 +131,7 @@ declare module '@magnusim/workspace' {
       /**
        * false: this app takes no study's design into a project as a geometry, so it runs no
        * simulation of it (Magnusim CAD). ws.project.linkGeometry, linkedGeometry and followGeometry are
-       * refused there (`not_allowed`); leave out what only matters to a simulation (unreleased, 1.9).
+       * refused there (`not_allowed`); leave out what only matters to a simulation (1.9).
        * Absent where they work, and on an older host: read absent as true.
        */
       projectLinks?: boolean;
@@ -493,14 +493,14 @@ declare module '@magnusim/workspace' {
       view?: ViewState;
   } | void;
   /**
-   * How much a tool of the app's assistant may change (unreleased, next host minor 1.9).
+   * How much a tool of the app's assistant may change (1.9).
    * `read` changes nothing; `edit` changes this page's own state; `compute` starts work that
    * takes time or the app's compute slot; `destructive` can't be undone. The app asks the user
    * before every `compute` and `destructive` call. An unknown risk counts as `destructive`.
    */
   export type AssistantRisk = 'read' | 'edit' | 'compute' | 'destructive';
   /**
-   * A tool's input, in the subset of JSON Schema the app accepts (unreleased, 1.9): every object
+   * A tool's input, in the subset of JSON Schema the app accepts (1.9): every object
    * lists its `properties` and says `additionalProperties: false`. No `$ref`, `oneOf`, `anyOf`,
    * `allOf`, `pattern`, `format` or `default`.
    */
@@ -526,7 +526,7 @@ declare module '@magnusim/workspace' {
       minItems?: number;
       maxItems?: number;
   } | AssistantObjectSchema;
-  /** An object in a tool's input schema (unreleased, 1.9): the tool's whole input is one. */
+  /** An object in a tool's input schema (1.9): the tool's whole input is one. */
   export interface AssistantObjectSchema {
       type: 'object';
       description?: string;
@@ -535,7 +535,7 @@ declare module '@magnusim/workspace' {
       additionalProperties: false;
   }
   /**
-   * A tool the app's assistant may call while this workspace is open (unreleased, 1.9). The app
+   * A tool the app's assistant may call while this workspace is open (1.9). The app
    * checks every constraint before your handler runs; the model may see the numeric and length
    * limits only as words in the description.
    */
@@ -552,7 +552,7 @@ declare module '@magnusim/workspace' {
       timeoutS?: number;
       /**
        * For a `destructive` tool: what the app's question before each call says the call does, in
-       * place of "can't be undone" (unreleased, 1.9). One sentence of fixed text, at most 120
+       * place of "can't be undone" (1.9). One sentence of fixed text, at most 120
        * characters, with no project data ("Deletes features from the Part; Ctrl+Z brings them back.").
        */
       confirm?: string;
@@ -563,7 +563,7 @@ declare module '@magnusim/workspace' {
        */
       priority?: number;
   }
-  /** One call of a tool, as the handler gets it (unreleased, 1.9). */
+  /** One call of a tool, as the handler gets it (1.9). */
   export interface AssistantCall {
       /** The call's id. */
       call: string;
@@ -580,7 +580,7 @@ declare module '@magnusim/workspace' {
       input: Record<string, unknown>;
       /**
        * The call's place in its step: one answer of the model, whose calls run one after another
-       * (unreleased, 1.9). `step` numbers the answers of the turn from 1; `callsLeftInStep` is how many
+       * (1.9). `step` numbers the answers of the turn from 1; `callsLeftInStep` is how many
        * calls of that answer come after this one; `editsLeftInStep` how many of those are this page's
        * `edit` or `destructive` tools (of the workspace the turn is bound to). A page that shows the
        * model a picture after its edits can take it once, when no edit follows. Absent for a call from
@@ -601,7 +601,7 @@ declare module '@magnusim/workspace' {
       progress(fraction: number | null, label?: string, opts?: AssistantProgressOptions): void;
       /**
        * Read a file the person attached in the Assistant panel, in this turn's conversation, by the
-       * attachment_id the model was given for it (unreleased, 1.9; absent on an older host, so check
+       * attachment_id the model was given for it (1.9; absent on an older host, so check
        * that it exists). Only while this call runs: a read keeps the call alive like any call of the
        * page, and one still going when the call ends stops. Resolves a File with the attachment's name
        * and bytes, typed application/octet-stream whatever it holds (never image/svg+xml: an SVG may
@@ -613,18 +613,18 @@ declare module '@magnusim/workspace' {
        */
       readAttachment?(id: string): Promise<File>;
   }
-  /** What else a call's progress says (unreleased, 1.9). */
+  /** What else a call's progress says (1.9). */
   export interface AssistantProgressOptions {
       /** The call waits for the person (only while it does). */
       waiting?: boolean;
   }
-  /** A picture in a tool's result (unreleased, 1.9): at most 4 per result, each at most 1.5 MB and 2000 px a side (more fails the call with code "too_large"). */
+  /** A picture in a tool's result (1.9): at most 4 per result, each at most 1.5 MB and 2000 px a side (more fails the call with code "too_large"). */
   export interface AssistantImage {
       mediaType: 'image/png' | 'image/jpeg' | 'image/webp';
       data: Blob;
   }
   /**
-   * What a handler returns (unreleased, 1.9): text, or `{text?, data?, images?, summary?}` (`text`
+   * What a handler returns (1.9): text, or `{text?, data?, images?, summary?}` (`text`
    * at most 64 KB, `data` plain JSON of at most 256 KB), or nothing. A larger result fails the call
    * with code "too_large". Everything in it but `summary` reaches the model as data, never as
    * instructions. `summary` is one line for the turn's log that names what the call did ("Added 2:
@@ -638,7 +638,7 @@ declare module '@magnusim/workspace' {
       summary?: string;
   } | void;
   /**
-   * Runs a tool call (unreleased, 1.9). A throw fails the call: an error's `.code` is kept when it
+   * Runs a tool call (1.9). A throw fails the call: an error's `.code` is kept when it
    * is "invalid_input", "busy" or "not_ready", and reads "failed" otherwise. Its `.message` says
    * what went wrong, its `.hint` how to fix it (one sentence, at most 500 characters), and its
    * `.detail` holds plain JSON for the model to act on (what the hint refers to: the field, the
@@ -647,7 +647,7 @@ declare module '@magnusim/workspace' {
    */
   export type AssistantHandler = (call: AssistantCall) => AssistantResult | Promise<AssistantResult>;
   /**
-   * Review rounds a page asks for when it registers its tools (unreleased, 1.9): when the model ends
+   * Review rounds a page asks for when it registers its tools (1.9): when the model ends
    * its answer in a turn bound to this tab after at least one of this page's `edit` or `destructive`
    * tools succeeded, the app sends it `prompt` ("Review round 1 of 3: <prompt>") and the turn goes on.
    * The turn ends when a round makes no successful edit, when `rounds` are used up, or at the turn's
@@ -658,7 +658,7 @@ declare module '@magnusim/workspace' {
       rounds: number;
       prompt: string;
   }
-  /** The app's answer to ws.assistant.register (unreleased, 1.9). */
+  /** The app's answer to ws.assistant.register (1.9). */
   export interface AssistantRegistration {
       /** False when the app's assistant could not take the tools now (`reason` says why); nothing changed then. */
       available: boolean;
@@ -674,7 +674,7 @@ declare module '@magnusim/workspace' {
       reason?: string;
   }
   /**
-   * A turn of the app's assistant bound to this page's tab (unreleased, 1.9): what the person asked,
+   * A turn of the app's assistant bound to this page's tab (1.9): what the person asked,
    * as the page hears it with ws.assistant.onTurn. `running` as it starts and again after each change
    * (at most once a second); `ended` once, at its end.
    */
@@ -685,7 +685,7 @@ declare module '@magnusim/workspace' {
       /** The first line of the person's request, as plain text, at most 60 characters ("Assistant: <title>" names an undo step well). */
       title: string;
       /**
-       * The conversation it runs in (unreleased, 1.9): the same for each turn of one conversation,
+       * The conversation it runs in (1.9): the same for each turn of one conversation,
        * so a page can keep what it tells the model per conversation. Absent on an older host.
        */
       conversation?: string | null;
@@ -727,7 +727,7 @@ declare module '@magnusim/workspace' {
       };
   }
   /**
-   * ws.assistant.stop's answer (unreleased, 1.9). `reason` when not stopped: "not_this_tab" (no turn of
+   * ws.assistant.stop's answer (1.9). `reason` when not stopped: "not_this_tab" (no turn of
    * that id was told to this page), "ended" (it already ended), "not_connected", "no_assistant",
    * "not_allowed" (a host without the call), or the app's code ("unknown_turn").
    */
@@ -736,7 +736,7 @@ declare module '@magnusim/workspace' {
       reason?: string;
   }
   /**
-   * ws.assistant.setUndo's answer (unreleased, 1.9): whether the app now offers the person to undo
+   * ws.assistant.setUndo's answer (1.9): whether the app now offers the person to undo
    * that turn's changes. `reason` when not: "not_this_tab" (no turn of that id was told to this page),
    * "no_assistant", "not_allowed" (a host without the call); a withdrawal answers offered false with
    * no reason.
@@ -746,7 +746,7 @@ declare module '@magnusim/workspace' {
       reason?: string;
   }
   /**
-   * What an onUndo handler answers (unreleased, 1.9): `undone` once the turn's changes went back as one
+   * What an onUndo handler answers (1.9): `undone` once the turn's changes went back as one
    * step, else why not: "not_newest" (something changed after them), "busy" (try again in a moment),
    * or the page's own word. The SDK answers "no_answer" for a handler that takes over 10 s, "failed"
    * for one that throws, and "no_handler" with none.
@@ -755,7 +755,7 @@ declare module '@magnusim/workspace' {
       undone: boolean;
       reason?: string;
   }
-  /** Tools this page offers to the app's assistant (unreleased, next host minor 1.9). */
+  /** Tools this page offers to the app's assistant (1.9). */
   export interface WorkspaceAssistant {
       /**
        * Set this page's tools and their handler in one step; register([], null) withdraws them.
@@ -811,9 +811,9 @@ declare module '@magnusim/workspace' {
       message?: string;
       /** The confirming button's label ("Delete", "Replace", ...). */
       confirmLabel?: string;
-      /** Unreleased (1.9): the confirming button answers only a deliberate click, made once it is enabled; a key press never does. */
+      /** 1.9: the confirming button answers only a deliberate click, made once it is enabled; a key press never does. */
       guard?: boolean;
-      /** Unreleased (1.9): Cancel has the focus, and Enter, like Escape, answers Cancel. */
+      /** 1.9: Cancel has the focus, and Enter, like Escape, answers Cancel. */
       safe?: boolean;
   }
   export interface PromptOptions {
@@ -1055,7 +1055,7 @@ declare module '@magnusim/workspace' {
           }>;
       };
       /**
-       * Tools this page offers to the app's assistant (unreleased, next host minor 1.9; absent on an
+       * Tools this page offers to the app's assistant (1.9; absent on an
        * older host, so check that it exists, and catch "not_allowed" from a host without it).
        */
       readonly assistant?: WorkspaceAssistant;
@@ -1081,12 +1081,12 @@ declare module '@magnusim/workspace' {
           fromRev: number | null;
       }) => void): () => void;
       /**
-       * `assistantKeys` (unreleased, 1.9): the person changed the keys of the app's Assistant panel
+       * `assistantKeys` (1.9): the person changed the keys of the app's Assistant panel
        * (context.assistantKeys holds them now): null for its default, Ctrl+/.
        */
       on(event: 'assistantKeys', fn: (keys: string[] | null) => void): () => void;
       /**
-       * `appearance` (unreleased, 1.9): the person changed the app's look, or the system turned light
+       * `appearance` (1.9): the person changed the app's look, or the system turned light
        * or dark under a 'system' choice. context.appearance and this page's <html> have it already
        * when a listener hears it; each listener gets its own copy.
        */

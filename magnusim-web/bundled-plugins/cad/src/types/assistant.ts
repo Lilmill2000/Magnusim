@@ -127,7 +127,7 @@ export interface TurnFacts {
   end: { state: AssistantTurnEnd; reason: string } | null;
   /** The review round it is in (the host's turn events), absent before the first. */
   review?: { round: number; of: number };
-  /** The conversation it runs in (AssistantTurn.conversation, unreleased 1.9), or null when the host names none. */
+  /** The conversation it runs in (AssistantTurn.conversation, 1.9), or null when the host names none. */
   conversation: string | null;
 }
 

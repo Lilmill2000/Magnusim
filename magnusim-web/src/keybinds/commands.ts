@@ -1,5 +1,5 @@
 /**
- * A workspace's commands file (manifest `[[workspaces]] commands`, unreleased 1.9; authoring.md,
+ * A workspace's commands file (manifest `[[workspaces]] commands`, 1.9; authoring.md,
  * "Workspace commands"): the commands a workspace has, their default keys and the contexts they
  * act in, which Settings → Keybinds lists and lets the person change.
  *

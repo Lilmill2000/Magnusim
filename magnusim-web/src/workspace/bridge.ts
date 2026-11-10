@@ -110,7 +110,7 @@ import { linkTouchesSetup, setupOf, type LinkSetup } from './linkReport';
 import { announcePref, PREFS_CHANNEL } from './prefsChannel';
 
 export const HOST_SDK_MAJOR = 1;
-export const HOST_API_VERSION = '1.8';
+export const HOST_API_VERSION = '1.9';
 /** A link job's id (gl-<time>-<hex>, scripts/link-store.js LINK_JOB_RE). */
 const LINK_JOB_ID = /^gl-[a-z0-9]{6,12}-[0-9a-f]{6}$/;
 /**
@@ -287,7 +287,7 @@ export interface BridgeHooks {
   toast(message: string, kind: 'info' | 'success' | 'error'): void;
   /**
    * guard (a deliberate click on Yes only) and safe (Enter answers Cancel) come from the page's
-   * ui.confirm when it asks for them (the CAD Part's Assistant keybind changes: unreleased 1.9).
+   * ui.confirm when it asks for them (the CAD Part's Assistant keybind changes: 1.9).
    */
   confirm(opts: { title: string; copy: string; yes: string; guard?: boolean; safe?: boolean }): Promise<boolean>;
   prompt(opts: { title: string; label: string; value: string; yes: string }): Promise<string | null>;

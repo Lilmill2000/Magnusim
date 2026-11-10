@@ -1,4 +1,4 @@
-"""A workspace's commands file (manifest ``[[workspaces]] commands``, unreleased 1.9).
+"""A workspace's commands file (manifest ``[[workspaces]] commands``, 1.9).
 
 The rules of src/keybinds/commands.ts readCommandsFile and sharedCommandIds, with the same words,
 for plugin:check: scripts/__tests__/fixtures/workspace-commands-cases.json holds the cases both

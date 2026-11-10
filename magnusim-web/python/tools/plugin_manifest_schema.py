@@ -283,7 +283,7 @@ ARRAY_TABLES: dict[str, tuple[type, tuple[str, ...], dict[str, dict[str, Any]]]]
             "commands": {
                 "pattern": r"^(workspace/.+\.[Jj][Ss][Oo][Nn])?$",
                 "description": (
-                    "Unreleased (1.9): a .json file in the plugin's workspace/ folder that lists the workspace's "
+                    "1.9: a .json file in the plugin's workspace/ folder that lists the workspace's "
                     "commands, their default keys and the contexts they act in, which Settings → Keybinds shows "
                     "and lets the person change (authoring.md, Workspace commands). An older host ignores it."
                 ),

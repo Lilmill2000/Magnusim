@@ -96,7 +96,7 @@ describe('ws.files: writing', () => {
   it("sends an ArrayBuffer in chunks it hands over, leaving the caller's buffer as it was", async () => {
     const { ws, posts, hello } = await open(uploads());
     expect(hello).toHaveBeenCalledWith({ magnusim: 'hello', sdkVersion: SDK_VERSION, instance: expect.any(String) }, '*');
-    expect(SDK_VERSION).toBe('1.4.0');
+    expect(SDK_VERSION).toBe('1.5.0');
     const data = new Uint8Array(40 * MiB);
     data[0] = 1;
     data[16 * MiB] = 2;
@@ -666,12 +666,12 @@ describe('ws.project.geometrySource and geometryFaces (host 1.7)', () => {
     expect(posts[1].params).toMatchObject({ originalNames: { rel: 'studies/st-1/original_names.json', sha256: SHA } });
   });
 
-  it('the SDK says 1.4.0', () => {
-    expect(SDK_VERSION).toBe('1.4.0');
+  it('the SDK says 1.5.0', () => {
+    expect(SDK_VERSION).toBe('1.5.0');
   });
 });
 
-describe('ws.assistant (unreleased, next host minor 1.9)', () => {
+describe('ws.assistant (1.9)', () => {
   const SCHEMA = { type: 'object', properties: { by: { type: 'integer', minimum: -100, maximum: 100 } }, required: ['by'], additionalProperties: false } as const;
   const ADD: AssistantTool = { name: 'add', description: 'Adds `by` to the counter.', inputSchema: SCHEMA, risk: 'edit' };
   const RESET: AssistantTool = { name: 'reset', description: 'Sets the counter to 0.', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, risk: 'destructive' };
@@ -684,10 +684,10 @@ describe('ws.assistant (unreleased, next host minor 1.9)', () => {
   const invoke = (push: (msg: Record<string, unknown>) => void, call: string, tool = 'add', input: unknown = { by: 2 }) =>
     push({ event: 'assistantInvoke', data: { call, turn: 'turn-1', tool, input } });
 
-  it('is there (feature-detect it), and the SDK still says 1.4.0', async () => {
+  it('is there (feature-detect it), and the SDK says 1.5.0', async () => {
     const { ws } = await open(accepting);
     expect(typeof ws.assistant?.register).toBe('function');
-    expect(SDK_VERSION).toBe('1.4.0');
+    expect(SDK_VERSION).toBe('1.5.0');
   });
 
   it('register sends only the fields the host reads, and awaits the host before it keeps the handler', async () => {
@@ -1288,7 +1288,7 @@ describe('ws.assistant (unreleased, next host minor 1.9)', () => {
   });
 });
 
-describe("context.appearance and the 'appearance' event: the app's look on the page (unreleased, 1.9)", () => {
+describe("context.appearance and the 'appearance' event: the app's look on the page (1.9)", () => {
   const html = () => document.documentElement;
   const shown = () => ({
     theme: html().dataset.theme,
