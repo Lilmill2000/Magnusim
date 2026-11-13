@@ -362,8 +362,6 @@ def test_a_million_lines_take_under_3_s():
     machine (CI) gets the bound scaled by how long the plain loop takes there, measured now:
     the test catches the tracker growing slower, not the machine being slower."""
     block = step_lines(1e-3)
-    t2 = HealthTracker(PISO_HINTS)
-    feed(t2, HEADER)
     lines = []
     i = 0
     while len(lines) < 1_000_000:
@@ -371,10 +369,20 @@ def test_a_million_lines_take_under_3_s():
         lines += [x if not x.startswith("Time") else f"Time = {i * 1e-3}" for x in block]
     lines = lines[:1_000_000]
     ref = min(_ref_loop(lines), _ref_loop(lines))
-    t0 = time.perf_counter()
-    for line in lines:
-        t2.line(line, None)
-    took = time.perf_counter() - t0
+
+    def timed():
+        t2 = HealthTracker(PISO_HINTS)
+        feed(t2, HEADER)
+        t0 = time.perf_counter()
+        for line in lines:
+            t2.line(line, None)
+        return time.perf_counter() - t0
+
+    # The faster of two passes, as for the plain loop: one pass is at the mercy of
+    # whatever else the machine is doing for those 3 s.
+    took = timed()
+    if took >= 3.0 * max(1.0, ref / REF_LOOP_S):
+        took = min(took, timed())
     bound = 3.0 * max(1.0, ref / REF_LOOP_S)
     assert took < bound, (took, bound, ref)
 

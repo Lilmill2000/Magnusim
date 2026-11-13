@@ -133,8 +133,11 @@ test("a solving run's health: the chip, the findings, the notice, the badge, the
     };
     new MutationObserver(note).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true });
   });
-  await postOk(request, '/api/run/start', { project_id: PID, simulation_id: sim, run_id: rid });
+  // Start from the panel, as a person does: the page then follows the run from its
+  // first step. A run started behind the page is only noticed by the idle queue
+  // watch (every 10 s), and the replayed log can be Unhealthy before that.
   const panel = panelOf(page);
+  await panel.locator('[data-run-start="1"]').click();
   await expect(chip(page)).toHaveText('Unhealthy', { timeout: 90_000 });
   const chips = await page.evaluate(() => /** @type {any} */ (window).__chips);
   const at = (w) => chips.indexOf(w);
@@ -479,7 +482,9 @@ test.describe('a solving run that settles like the validation pipe', () => {
       };
       new MutationObserver(note).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true });
     });
-    await post('/api/run/start', { project_id: SPID, simulation_id: ssim, run_id: rid });
+    // Start from the panel so the page follows the run from its first step: this
+    // replayed run is over in a few seconds, inside one idle queue watch (10 s).
+    await panel.locator('[data-run-start="1"]').click();
     const status = async () =>
       ((await (await request.get(`${live.base}/api/run/status?project_id=${SPID}&simulation_id=${ssim}`)).json()).runs || []).find((r) => String(r.id) === rid) || {};
     // Past iteration 551 while it solves (where it turned "Watch closely"), then done.
