@@ -8,7 +8,7 @@ import { NacaError, parseCode } from '../geometry/naca';
 import { hasOutline, outlineRings, profileOf, referenceLength, shapeLabel, type Shape } from '../geometry/shapes';
 import { radiusRings } from '../geometry/polygon';
 import { FLUIDS, LIMITS, newBodyId, type Body, type FieldMode, type FlowModel, type RefineLevels, type Resolution, type Scene, type Walls } from '../scene/scene';
-import { RESOLUTION_CELLS, gridFor, type Engine } from '../sim/engine';
+import { GRID_NX, GRID_NY, RESOLUTION_CELLS, gridFor, gridHeight, type Engine } from '../sim/engine';
 import { useStore, type Store } from '../app/store';
 import { useEngineTick } from '../app/hooks';
 import { emptySketch } from '../sketch/model';
@@ -197,6 +197,13 @@ export function TunnelPanel({ store, engine, units }: { store: Store; engine: En
         />
       </Field>
       {engine.refineUnavailable ? <Hint tone="warning">{engine.refineUnavailable}</Hint> : null}
+      {grid && Math.abs(gridHeight(scene, grid) / scene.tunnel.height - 1) > 0.02 ? (
+        <Hint tone="warning">
+          <span data-t2d-grid-height={gridHeight(scene, grid)}>
+            This tunnel is too long for its height for the grid (more than {Math.round(GRID_NX[1] / GRID_NY[0])} to 1): it runs {fmtRe(fromSi('length', gridHeight(scene, grid), lengthUnit(units)))} {lengthUnit(units)} tall, not {fmtRe(fromSi('length', scene.tunnel.height, lengthUnit(units)))}. Make it shorter or taller.
+          </span>
+        </Hint>
+      ) : null}
       <Hint>The shaded strips at the inlet and the outlet absorb pressure waves; the flow there is not physical.</Hint>
     </Section>
   );

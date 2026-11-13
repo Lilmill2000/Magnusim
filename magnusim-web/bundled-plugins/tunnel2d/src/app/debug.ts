@@ -1,7 +1,7 @@
 // window.__TUNNEL__: what the browser tests read and drive (e2e/), never the UI.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { Workspace } from '@magnusim/workspace';
-import type { Engine } from '../sim/engine';
+import { benchLog, type Engine } from '../sim/engine';
 import { runSchaferTurek } from '../sim/validate';
 import { airfoilCase, plateCase, runCase, type AirfoilSpec, type PlateSpec } from '../sim/validateRans';
 import { turnHandle, worldOutline } from '../ui/overlay';
@@ -82,6 +82,10 @@ export function exposeTestHandle({ store, engine, device, editor }: { ws: Worksp
     view: () => ({ ...engine.worldView }),
     livePose: (id: string) => engine.livePose(id),
     bodyLive: (id: string) => engine.bodyLive(id),
+    /** How far a body has turned in the flow (radians, its spin included). */
+    turnAngle: (id: string) => engine.turnAngle(id),
+    /** The benchmarks run this page: quick look, the GPU's own time, the time used, MLUPS. */
+    bench: () => benchLog.slice(),
     /** A body's mean coefficients over the last `window` simulated seconds. */
     measure: (id: string, window: number) => engine.measure(id, window),
     /** The flow at world points, and the pressure coefficient round a body. */

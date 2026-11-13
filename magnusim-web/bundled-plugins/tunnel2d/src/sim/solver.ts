@@ -5,6 +5,19 @@ import type { SdfGrid } from '../geometry/sdf';
 import { FORCE_FIX, FORCE_STRIDE, FORCE_WORDS, HEALTH_SLOT, TORQUE_FIX, MAX_BODIES, MAX_STEPS, TURB, W, WALLS, WG, fieldShader, macroShader, sampleShader, stepShader } from './kernels';
 import type { Patch } from './refine';
 
+/**
+ * Shader modules and pipelines kept per device and shared by every solver on it. Each grid
+ * (the benchmarks that pick Auto's grid, a new tunnel, a refinement patch) is a new solver,
+ * and building its pipelines again took seconds: a flow model switch, which benchmarks up to
+ * three grids, held the model it left that long.
+ */
+const shared = new WeakMap<GPUDevice, { modules: Map<string, GPUShaderModule>; pipes: Map<string, GPUComputePipeline | null> }>();
+function sharedFor(device: GPUDevice) {
+  let s = shared.get(device);
+  if (!s) shared.set(device, (s = { modules: new Map(), pipes: new Map() }));
+  return s;
+}
+
 export interface SimConfig {
   nx: number;
   ny: number;
@@ -85,7 +98,7 @@ export class Solver {
   private stepPipe!: GPUComputePipeline;
   private stepPipeKey = '';
   /** Step pipelines built (null: being built in the background), by their constants. */
-  private pipes = new Map<string, GPUComputePipeline | null>();
+  private pipes: Map<string, GPUComputePipeline | null>;
   private stepBG: [GPUBindGroup, GPUBindGroup] | null = null;
   private slotBGs: GPUBindGroup[] = [];
   private slotBuf: GPUBuffer;
@@ -141,9 +154,21 @@ export class Solver {
     this.sampleH = Math.ceil(this.ny / SAMPLE_STRIDE);
     this.sampledBuf = device.createBuffer({ size: this.sampleW * this.sampleH * 4, usage: S.STORAGE | S.COPY_SRC });
     this.sampledRead = device.createBuffer({ size: this.sampleW * this.sampleH * 4, usage: S.MAP_READ | S.COPY_DST });
-    this.stepModule = device.createShaderModule({ code: stepShader(this.config.patch), label: this.config.patch ? 'tunnel patch step' : 'tunnel step' });
-    this.macroPipe = device.createComputePipeline({ layout: 'auto', compute: { module: device.createShaderModule({ code: macroShader(), label: 'tunnel macro' }), entryPoint: 'main' } });
-    this.fieldPipe = device.createComputePipeline({ layout: 'auto', compute: { module: device.createShaderModule({ code: fieldShader(), label: 'tunnel field' }), entryPoint: 'main' } });
+    const cache = sharedFor(device);
+    this.pipes = cache.pipes;
+    const module = (key: string, code: () => string, label: string) => {
+      let m = cache.modules.get(key);
+      if (!m) cache.modules.set(key, (m = device.createShaderModule({ code: code(), label })));
+      return m;
+    };
+    const pipe = (key: string, code: () => string, label: string) => {
+      let p = cache.pipes.get(key);
+      if (!p) cache.pipes.set(key, (p = device.createComputePipeline({ layout: 'auto', compute: { module: module(key, code, label), entryPoint: 'main' } })));
+      return p;
+    };
+    this.stepModule = this.config.patch ? module('step|patch', () => stepShader(true), 'tunnel patch step') : module('step', () => stepShader(false), 'tunnel step');
+    this.macroPipe = pipe('macro', macroShader, 'tunnel macro');
+    this.fieldPipe = pipe('field', fieldShader, 'tunnel field');
     const groups = Math.ceil(this.n / WG);
     this.groups = [Math.min(groups, 32768), Math.ceil(groups / Math.min(groups, 32768))];
     this.writeBodies();
@@ -460,12 +485,13 @@ export class Solver {
     for (const c of this.children) c.encodeCoupled(pass, slot);
   }
 
-  encodeFrame(enc: GPUCommandEncoder, steps: number, field: { mode: number; uRef: number; lRef: number; rhoRef?: number }): { readForces: boolean } {
+  /** `stamps`: the GPU's own start and end times of the steps' pass, into a timestamp query set (the benchmark). */
+  encodeFrame(enc: GPUCommandEncoder, steps: number, field: { mode: number; uRef: number; lRef: number; rhoRef?: number }, stamps?: GPUQuerySet): { readForces: boolean } {
     const count = Math.min(this.maxFrameSteps, Math.max(0, Math.floor(steps)));
     this.beginFrame(enc, count);
     let readForces = false;
     if (count > 0) {
-      const pass = enc.beginComputePass({ label: 'tunnel steps' });
+      const pass = enc.beginComputePass({ label: 'tunnel steps', ...(stamps ? { timestampWrites: { querySet: stamps, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1 } } : {}) });
       for (let s = 0; s < count; s++) this.encodeStep(pass, s);
       pass.end();
       readForces = count > 0;
@@ -714,7 +740,7 @@ export class Solver {
     if (this.sampler) for (const b of [this.sampler.pts, this.sampler.out, this.sampler.read, this.sampler.uni]) b.destroy();
     for (const b of [...(this.aux ?? []), ...this.auxDummy, ...this.momDummy, ...(this.mom ?? [])]) b.destroy();
     for (const c of this.children) c.destroy();
-    for (const b of [...this.f, this.paramsBuf, this.bodiesBuf, this.sdfBuf, this.forceBuf, this.slotBuf, this.macroBuf, this.scalarBuf, this.fieldUni, this.sampledBuf, ...this.staging]) b.destroy();
+    for (const b of [...this.f, this.paramsBuf, this.bodiesBuf, this.sdfBuf, this.forceBuf, this.slotBuf, this.macroBuf, this.scalarBuf, this.fieldUni, this.sampledBuf, this.sampledRead, ...this.staging]) b.destroy();
     this.staging = [];
   }
 }

@@ -56,6 +56,12 @@ export class RefineManager {
   private device: GPUDevice;
   private coarse: Solver;
   private groups: Group[] = [];
+  /**
+   * Groups replaced in the last update: the frame's encoder may still copy from them (a new
+   * patch is filled from the ones it replaces), so they are destroyed only at the next update,
+   * after that frame was submitted (a buffer destroyed before its submit drops the whole frame).
+   */
+  private retired: Refinement[] = [];
   private levels = 0;
   private physics: Physics | null = null;
 
@@ -82,7 +88,13 @@ export class RefineManager {
   clear() {
     for (const g of this.groups) g.ref.destroy();
     this.groups = [];
+    this.destroyRetired();
     this.coarse.setPatches([]);
+  }
+
+  private destroyRetired() {
+    for (const r of this.retired) r.destroy();
+    this.retired = [];
   }
 
   setPhysics(p: Physics) {
@@ -118,6 +130,8 @@ export class RefineManager {
    * cells: clear of the absorbing layers).
    */
   update(enc: GPUCommandEncoder, bodies: ManagedBody[], levels: number, bounds: Box) {
+    // The last frame, which may have copied from them, has been submitted.
+    this.destroyRetired();
     if (!this.physics) return;
     if (levels !== this.levels) {
       this.clear();
@@ -176,7 +190,7 @@ export class RefineManager {
       group.ref.setBodies(members.map((b) => ({ key: b.key, local: b.local, band: b.band, from: b.from, to: b.to })));
       next.push(group);
     }
-    for (const g of this.groups) if (!next.includes(g)) g.ref.destroy();
+    for (const g of this.groups) if (!next.includes(g)) this.retired.push(g.ref);
     this.groups = next;
     this.coarse.setPatches(next.map((g) => g.ref.levels[0]));
   }

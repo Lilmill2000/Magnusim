@@ -19,6 +19,7 @@
 // 7. Without WebGPU (no navigator.gpu, or no adapter), the page says why it cannot run.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { chromium, expect, test } from '@playwright/test';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { e2eTemp, NO_GEOMETRY_PROJECT, startHost } from '../../../e2e/support/plugin-suite.js';
 
@@ -83,6 +84,18 @@ async function openTunnel(page, study) {
 const T = (frame, fn, arg) => frame.evaluate(fn, arg);
 const scene = (frame) => T(frame, () => window.__TUNNEL__.scene());
 const stats = (frame) => T(frame, () => window.__TUNNEL__.stats());
+
+/** A body's turning rate in the flow (rad/s of simulated time), over a short stretch. */
+async function turnRate(frame, id) {
+  const read = () => T(frame, (b) => ({ a: window.__TUNNEL__.turnAngle(b), t: window.__TUNNEL__.stats().simTime }), id);
+  const r0 = await read();
+  let r1 = r0;
+  for (let i = 0; i < 100 && r1.t - r0.t < 0.05; i++) {
+    await new Promise((res) => setTimeout(res, 100));
+    r1 = await read();
+  }
+  return (r1.a - r0.a) / (r1.t - r0.t);
+}
 
 /** Frame-internal CSS px -> page px. */
 async function pageXY(page, frame, xy) {
@@ -286,12 +299,23 @@ test('spin (the Magnus effect and its cap), the wall kinds, the resolution and a
   await expect.poll(async () => (await scene(frame)).bodies[0].spin, { timeout: 10_000 }).toBeCloseTo((716 * 2 * Math.PI) / 60, 3);
   await expect.poll(async () => (await T(frame, (id) => window.__TUNNEL__.bodyLive(id), cyl.id)).cl, { timeout: 60_000 }).toBeLessThan(-0.5);
   await expect(frame.locator('[data-t2d-spin-capped]')).toHaveCount(0);
+  // It turns at the spin set (the drag limit, slower, once held it to an edge at 0.6 x the wind).
+  const omega = (716 * 2 * Math.PI) / 60;
+  expect(Math.abs((await turnRate(frame, cyl.id)) / omega - 1)).toBeLessThan(0.03);
   // 3000 rpm: the edge would pass twice the wind speed; held there, and the panel says so.
   await spin.fill('3000');
   await spin.press('Enter');
   await expect(frame.locator('[data-t2d-spin-capped]')).toContainText('rpm');
   await page.waitForTimeout(2000);
   expect((await stats(frame)).state).toBe('running');
+  // Turning at the rate the panel says it is held to.
+  const heldRpm = Number(/held to ([\d,.]+) rpm/.exec(await frame.locator('[data-t2d-spin-capped]').textContent())[1].replace(/,/g, ''));
+  expect(Math.abs((await turnRate(frame, cyl.id)) / ((heldRpm * 2 * Math.PI) / 60) - 1)).toBeLessThan(0.03);
+  // Spin 0: it stops (no turn left over to run on).
+  await spin.fill('0');
+  await spin.press('Enter');
+  await page.waitForTimeout(1000);
+  expect(Math.abs(await turnRate(frame, cyl.id))).toBeLessThan(0.01 * omega);
 
   // The wall kinds: each runs.
   const walls = frame.getByRole('combobox', { name: 'Walls' });
@@ -513,4 +537,31 @@ test('without WebGPU the page says why it cannot run, and what to turn on where'
   } finally {
     await off.close();
   }
+});
+
+test('a saved tunnel that does not read is kept aside before the new one saves over it', async ({ page, request }) => {
+  needsGpu();
+  const study = await newTunnel(request, 'Unreadable tunnel');
+  // A scene from a newer plugin (as the file a later version would leave).
+  const dir = join(host.projects, PROJECT, 'plugins', KEY, 'studies', study.id);
+  mkdirSync(dir, { recursive: true });
+  const original = JSON.stringify({ version: 99, tunnel: { length: 8, height: 4 }, bodies: [{ id: 'x', shape: { kind: 'future-shape' } }] });
+  writeFileSync(join(dir, 'scene.json'), original);
+  const frame = await openTunnel(page, study);
+  // The page says the file was not read, and where it is kept.
+  const banner = frame.locator('.t2d-banner').first();
+  await expect(banner).toContainText('could not be read');
+  await expect(banner).toContainText(`studies/${study.id}/scene-unreadable-`);
+  const kept = () => readdirSync(dir).filter((f) => f.startsWith('scene-unreadable-'));
+  expect(kept()).toHaveLength(1);
+  expect(readFileSync(join(dir, kept()[0]), 'utf8')).toBe(original);
+  // A change saves the new tunnel over scene.json; the kept copy stays as it was.
+  const speed = frame.getByRole('textbox', { name: 'Wind speed' });
+  await speed.fill('12');
+  await speed.press('Enter');
+  await expect.poll(() => T(frame, () => window.__TUNNEL__.save()), { timeout: 30_000 }).toBe('saved');
+  expect(JSON.parse(readFileSync(join(dir, 'scene.json'), 'utf8')).flow.speed).toBe(12);
+  expect(kept()).toHaveLength(1);
+  expect(readFileSync(join(dir, kept()[0]), 'utf8')).toBe(original);
+  expect(existsSync(join(dir, 'scene.json'))).toBe(true);
 });

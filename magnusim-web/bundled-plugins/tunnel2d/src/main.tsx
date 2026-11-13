@@ -54,6 +54,8 @@ async function main() {
   let device: GPUDevice;
   try {
     device = await adapter.requestDevice({
+      // The GPU's own timings for the benchmark that picks the grid (where the GPU gives them).
+      requiredFeatures: adapter.features.has('timestamp-query') ? ['timestamp-query'] : [],
       requiredLimits: {
         maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
         maxBufferSize: adapter.limits.maxBufferSize,
@@ -82,6 +84,8 @@ async function main() {
   const store = new Store(loaded.scene);
   const saver = new Saver(ws, store, study.id, loaded.etag);
   if (!loaded.etag) await saver.create(loaded.scene);
+  // A file that could not be read nor kept aside is never saved over: this tunnel is not saved.
+  if (loaded.problem && loaded.kept === null) store.setSave('conflict', 'The saved tunnel could not be read, nor a copy of it kept, so changes here are not saved over it.');
 
   // The view's colours: light in every theme (pictures and recordings are drawn from it).
   const canvas = document.createElement('canvas');
@@ -107,7 +111,7 @@ async function main() {
   exposeTestHandle({ ws, store, engine, device, editor });
   window.addEventListener('pagehide', () => void saver.flush());
 
-  root.render(createElement(App, { ws, store, engine, editor, probes, sweeps, units: ws.context.units, problem: loaded.problem }));
+  root.render(createElement(App, { ws, store, engine, editor, probes, sweeps, units: ws.context.units, problem: loaded.problem, kept: loaded.kept ?? null }));
 }
 
 void main();

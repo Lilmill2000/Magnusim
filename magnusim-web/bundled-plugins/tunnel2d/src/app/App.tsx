@@ -225,6 +225,7 @@ export function App({
   sweeps,
   units: units0,
   problem,
+  kept = null,
 }: {
   ws: Workspace;
   store: Store;
@@ -234,6 +235,8 @@ export function App({
   sweeps: SweepHost;
   units: UnitSystem;
   problem: string;
+  /** Where the unreadable scene file was kept (null: it could not be, and nothing is saved). */
+  kept?: string | null;
 }) {
   const units = useWorkspaceUnits(ws, units0);
   const [paused, setPaused] = useState(false);
@@ -430,7 +433,14 @@ export function App({
         <div className="t2d-stage">
           {problem ? (
             <div className="t2d-banner">
-              <DisabledReason reason={`The saved tunnel could not be read (${problem}), so a new one was started.`} role="alert" />
+              <DisabledReason
+                reason={
+                  kept
+                    ? `The saved tunnel could not be read (${problem}), so a new one was started. The file is kept as ${kept} in the plugin's folder of the project.`
+                    : `The saved tunnel could not be read (${problem}), so a new one was started; it is not saved over the file.`
+                }
+                role="alert"
+              />
             </div>
           ) : null}
           {save === 'conflict' || save === 'failed' ? (

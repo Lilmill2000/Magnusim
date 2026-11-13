@@ -16,17 +16,13 @@ import { Rheo } from './rheo';
 import type { MapName, RheoLook } from '../render/renderer';
 import { Streamlines } from './streamlines';
 import { RefineManager } from './refineManager';
+import { RESOLUTION_CELLS, gridFor } from './grid';
 import { outerRing, splitSurface, surfacePoints, type CpPoint } from './surfaceCp';
 import { FIELD_MODES, Solver, type FrameResult, type GpuBody, type Physics } from './solver';
 import { GRID_RE_MAX, SMAG_CS, U_LATTICE, latticeMap, reynolds, type LatticeMap } from './units';
 
-/** Cells in the lattice for each resolution (the grid keeps the tunnel's aspect). */
-export const RESOLUTION_CELLS: Record<Exclude<Resolution, 'auto'>, number> = {
-  low: 512 * 256,
-  medium: 1024 * 512,
-  high: 1536 * 768,
-  ultra: 2048 * 1024,
-};
+/** The grid for a tunnel (src/sim/grid.ts). */
+export { GRID_NX, GRID_NY, RESOLUTION_CELLS, gridFor, gridHeight } from './grid';
 /** A body's wall moves at most this fast (cells per step): 0.6 of the inflow speed. */
 export const WALL_SPEED_MAX = 0.03;
 
@@ -80,14 +76,6 @@ export function particleMap(view: Scene['view']): MapName {
   return FIELD_COLORMAP[view.field];
 }
 
-export function gridFor(scene: Scene, cells: number): { nx: number; ny: number } {
-  const { length, height } = scene.tunnel;
-  let nx = Math.round(Math.sqrt((cells * length) / height));
-  let ny = Math.round(cells / nx);
-  nx = Math.max(32, Math.min(8192, nx));
-  ny = Math.max(16, Math.min(8192, ny));
-  return { nx, ny };
-}
 
 export interface Stats {
   adapter: string;
@@ -188,8 +176,17 @@ const SAMPLES_MAX = 40_000;
 type Listener = () => void;
 
 const benchCache = new Map<string, number>();
-/** Below this (million lattice updates a second) a device is too slow for the full benchmark: T0's slowest GPU, an AMD iGPU, ran 425. */
-const SLOW_DEVICE_MLUPS = 100;
+/** Whether this page has kept the GPU busy long enough for its clocks to come up (benchmarkAt). */
+let gpuWarm = false;
+/** Each benchmark's readings this page (for the tests: why Auto chose its grid). */
+export const benchLog: { key: string; quick: number; gpuMs: number | null; ms: number | null; mlups: number; wall?: number }[] = [];
+/**
+ * Below this (million lattice updates a second) a device is too slow for the full benchmark:
+ * Chrome's software adapter runs about 1, T0's slowest GPU (an AMD iGPU) 425. Four steps are
+ * mostly waiting, not GPU work: at 100, a CPU-starved browser's 20 ms wait passed a GPU off
+ * as software and Auto chose the low grid; at 10 it takes a 200 ms one.
+ */
+const SLOW_DEVICE_MLUPS = 10;
 
 export class Engine {
   readonly device: GPUDevice;
@@ -332,6 +329,46 @@ export class Engine {
   /** This device's speed from its last benchmark (million lattice updates a second), or 0. */
   private deviceMlups = 0;
 
+  /**
+   * The GPU's own time (ms) for `steps` steps of a solver; null without timestamp queries. An
+   * idle GPU runs its first work at low clocks while it speeds up (the medium grid's first
+   * benchmark read 4 times slow, and Auto chose the low grid): runs are timed until two in a
+   * row agree, at most 8, and the fastest counts.
+   */
+  private async gpuTime(s: Solver, steps: number): Promise<number | null> {
+    if (!this.device.features.has('timestamp-query')) return null;
+    const S = GPUBufferUsage;
+    const set = this.device.createQuerySet({ type: 'timestamp', count: 2 });
+    const resolve = this.device.createBuffer({ size: 16, usage: S.QUERY_RESOLVE | S.COPY_SRC });
+    const read = this.device.createBuffer({ size: 16, usage: S.MAP_READ | S.COPY_DST });
+    try {
+      let best = Infinity;
+      let last = Infinity;
+      for (let i = 0; i < 8; i++) {
+        const enc = this.device.createCommandEncoder();
+        s.encodeFrame(enc, steps, { mode: 0, uRef: 0.05, lRef: 50 }, set);
+        enc.resolveQuerySet(set, 0, 2, resolve, 0);
+        enc.copyBufferToBuffer(resolve, 0, read, 0, 16);
+        this.device.queue.submit([enc.finish()]);
+        await read.mapAsync(GPUMapMode.READ);
+        const t = new BigUint64Array(read.getMappedRange().slice(0));
+        read.unmap();
+        const ms = Number(t[1] - t[0]) / 1e6;
+        if (!(ms > 0)) continue;
+        best = Math.min(best, ms);
+        if (Math.abs(ms - last) <= 0.1 * Math.min(ms, last)) break;
+        last = ms;
+      }
+      return Number.isFinite(best) ? best : null;
+    } catch {
+      return null;
+    } finally {
+      set.destroy();
+      resolve.destroy();
+      read.destroy();
+    }
+  }
+
   async benchmarkAt(nx: number, ny: number, turb: 'off' | 'sa' = 'off'): Promise<number> {
     const key = `${nx}x${ny}|${turb}`;
     const cached = benchCache.get(key);
@@ -339,6 +376,7 @@ export class Engine {
       this.deviceMlups = cached;
       return cached;
     }
+    const w0 = performance.now();
     const s = new Solver(this.device, { nx, ny, walls: 'slip' });
     if (turb === 'sa') s.setPhysics({ u: U_LATTICE, tau: 0.51, smagorinsky: false, smagCs: SMAG_CS, turb: 'sa', nuMol: 1e-6, nuFloor: U_LATTICE / GRID_RE_MAX });
     else s.setPhysics({ u: U_LATTICE, tau: 0.51, smagorinsky: true, smagCs: SMAG_CS });
@@ -357,17 +395,35 @@ export class Engine {
     const quick = (nx * ny * 4) / (Math.max(0.1, performance.now() - tq) / 1000) / 1e6;
     if (quick < SLOW_DEVICE_MLUPS) {
       s.destroy();
+      benchLog.push({ key, quick, gpuMs: null, ms: null, mlups: quick });
       benchCache.set(key, quick);
       this.deviceMlups = quick;
       return quick;
     }
     await run(30);
     const steps = Math.max(40, Math.min(400, Math.round(2e8 / (nx * ny))));
-    const t0 = performance.now();
-    await run(steps);
-    const ms = Math.max(0.1, performance.now() - t0);
+    // An idle GPU runs at low clocks and takes a few hundred ms of work to speed up: before the
+    // page's first timing, keep it busy that long (else Auto judged it by its idle clocks).
+    if (!gpuWarm) {
+      const t0 = performance.now();
+      while (performance.now() - t0 < 300) await run(steps);
+      gpuWarm = true;
+    }
+    // The GPU's own time for the steps where it can say (timestamp queries): a time taken on
+    // the page also holds the wait for the GPU's answer, tens of ms when the CPU is busy, and
+    // a GPU read as several times slower made Auto choose a coarse grid. Without them, the
+    // page's time (a slower reading: never a grid too fine).
+    const gpuMs = await this.gpuTime(s, steps);
+    let ms: number;
+    if (gpuMs != null && gpuMs > 0) ms = gpuMs;
+    else {
+      const t0 = performance.now();
+      await run(steps);
+      ms = Math.max(0.1, performance.now() - t0);
+    }
     s.destroy();
     const mlups = (nx * ny * steps) / (ms / 1000) / 1e6;
+    benchLog.push({ key, quick, gpuMs, ms, mlups, wall: performance.now() - w0 });
     benchCache.set(key, mlups);
     this.deviceMlups = mlups;
     return mlups;
@@ -615,6 +671,11 @@ export class Engine {
     // Nose up is clockwise here (the leading side is on the left, upstream).
     const cm = -st.mzEma / (q * (L / this.map.dx));
     return { ...pose, fx: toN(st.fxEma), fy: toN(st.fyEma), cd: st.fxEma / q, cl: st.fyEma / q, mz: cm * qRef * L * L, cm };
+  }
+
+  /** How far a body has turned in the flow (radians, counter-clockwise), its spin included (tests). */
+  turnAngle(id: string): number | null {
+    return this.bodies.get(id)?.pose.theta ?? null;
   }
 
   /** The fastest spin (rad/s) a body may turn at: its edge at SPIN_TIP_MAX. Null before the grid is set. */
@@ -914,6 +975,7 @@ export class Engine {
     const gpuBodies: GpuBody[] = [];
     for (const id of this.order) {
       const st = this.bodies.get(id)!;
+      const spun = st.spinAngle;
       if (steps > 0 && st.body.spin) {
         const cap = this.spinCap(st.body.id) ?? Infinity;
         st.spinAngle += Math.sign(st.body.spin) * Math.min(Math.abs(st.body.spin), cap) * map.dt * steps;
@@ -930,10 +992,14 @@ export class Engine {
         const r = Math.max(1, st.rCells);
         const [ex, vx] = follow(from.x - to.x, st.vel.x, w, steps);
         const [ey, vy] = follow(from.y - to.y, st.vel.y, w, steps);
-        const [et, vt] = follow(from.theta - to.theta, st.vel.theta, w, steps);
+        // The spin turns the body at its own rate (held to SPIN_TIP_MAX, as the panel says);
+        // the follow and its wall-speed limit are for turning it by hand, so they see the angle
+        // without the spin (else a fast spin was held to the slower drag limit, and the turn
+        // it fell behind ran on after the spin was stopped).
+        const [et, vt] = follow(from.theta - spun - (to.theta - st.spinAngle), st.vel.theta, w, steps);
         let mx = to.x + ex - from.x;
         let my = to.y + ey - from.y;
-        let mt = to.theta + et - from.theta;
+        let mt = to.theta - st.spinAngle + et - (from.theta - spun);
         // The wall-speed limit: a frame moves at most WALL_SPEED_MAX a step, edges included.
         const move = Math.hypot(mx, my);
         if (move > WALL_SPEED_MAX * steps) {
@@ -944,7 +1010,7 @@ export class Engine {
         if (Math.abs(mt) > maxTurn) mt = Math.sign(mt) * maxTurn;
         const capped = Math.hypot(mx, my) < move - 1e-9;
         st.vel = { x: capped ? mx / steps : vx, y: capped ? my / steps : vy, theta: Math.abs(mt) >= maxTurn ? mt / steps : vt };
-        st.pose = { x: from.x + mx, y: from.y + my, theta: from.theta + mt };
+        st.pose = { x: from.x + mx, y: from.y + my, theta: from.theta + mt + (st.spinAngle - spun) };
       }
       gpuBodies.push({ key: `${id}:${st.key}`, sdf: st.sdf, from: steps === 0 ? st.pose : from, to: st.pose, gamma: this.circulation(st, scene, map) });
     }

@@ -16,6 +16,17 @@ export interface Loaded {
   etag: string | null;
   /** Why the saved file could not be used (a new scene was made in its place), or ''. */
   problem: string;
+  /**
+   * Where the file that could not be used was kept before anything is saved over it; null
+   * when it could not be copied, and then nothing is saved (so it is never lost).
+   */
+  kept?: string | null;
+}
+
+/** The name the unreadable scene is kept under: scene-unreadable-2026-11-12-0930-05.json. */
+export function keptPath(studyId: string, now = new Date()): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `studies/${studyId}/scene-unreadable-${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}-${p(now.getHours())}${p(now.getMinutes())}-${p(now.getSeconds())}.json`;
 }
 
 export async function loadScene(ws: Workspace, studyId: string): Promise<Loaded> {
@@ -27,7 +38,16 @@ export async function loadScene(ws: Workspace, studyId: string): Promise<Loaded>
   try {
     return { scene: parseScene(JSON.parse(new TextDecoder().decode(buf))), etag: info.etag, problem: '' };
   } catch (err) {
-    return { scene: defaultScene(), etag: info.etag, problem: err instanceof Error ? err.message : String(err) };
+    const problem = err instanceof Error ? err.message : String(err);
+    // A new scene takes its place, and its first save replaces the file: keep the file first
+    // (a tunnel saved by a newer plugin, one body that does not read), so nothing is lost.
+    const kept = keptPath(studyId);
+    try {
+      await ws.files.write(kept, buf, { ifMatch: null });
+      return { scene: defaultScene(), etag: info.etag, problem, kept };
+    } catch {
+      return { scene: defaultScene(), etag: info.etag, problem, kept: null };
+    }
   }
 }
 

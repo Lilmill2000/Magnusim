@@ -116,6 +116,10 @@ test('NACA 2412 at 6°: surface pressure against XFOIL, the moment two ways, and
   const study = await newTunnel(env.host, request, 'Forces 2412');
   const frame = await openTunnel(env.host, page, study);
   const id = (await scene(frame)).bodies[0].id;
+  // The tolerances below are for the default grid on a GPU: Auto picks 1024 x 512 (128 cells
+  // across the chord). A short benchmark misread under a busy CPU once took a GPU for a slow
+  // device and picked 512 x 256, and Cp near the nose missed XFOIL's by 0.12.
+  await expect(frame.locator('[data-t2d-status]'), 'Auto picks the default grid on this GPU').toHaveAttribute('data-grid', '1024x512', { timeout: 20_000 });
   await frame.locator(`[data-t2d-body="${id}"]`).click();
   await settledMeans(page, frame, 8000);
   const cp = await meanCp(page, frame, id);
