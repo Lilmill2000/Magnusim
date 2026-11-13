@@ -29472,8 +29472,10 @@ function readRefEditorDraft() {
 
 function showRefEditor(ref) {
   if (!ref) return;
+  // A refused Refine out to stays refused (its value in the field, the note under it) when the
+  // same refinement's editor is shown again, as a refresh after a save does; another one starts clear.
+  if (String(refinementCatalog.activeId) !== String(ref.id)) refinementCatalog.reachRefused = null;
   refinementCatalog.activeId = ref.id;
-  refinementCatalog.reachRefused = null;
   if (ref.mesh_id) refinementCatalog.meshId = ref.mesh_id;
   refinementCatalog.draft_faces = (ref.faces || []).slice();
   const mid = currentRefMeshId();

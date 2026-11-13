@@ -66,7 +66,7 @@ test.beforeAll(async ({ request }) => {
     env: {
       MAGNUSIM_TEST_COMPUTE: 'fake',
       MAGNUSIM_TEST_MESH_SECONDS: '1',
-      MAGNUSIM_TEST_SOLVE_SECONDS: '8',
+      MAGNUSIM_TEST_SOLVE_SECONDS: '25', // room for the page to show "Checking" and for a Stop before it fails, on a slow CI runner
       MAGNUSIM_TEST_SOLVE_RESULT: 'fail',
       MAGNUSIM_TEST_SOLVE_LOG: log,
       MAGNUSIM_TEST_SOLVE_HINTS: join(HEALTH, 'run2.hints.json'),

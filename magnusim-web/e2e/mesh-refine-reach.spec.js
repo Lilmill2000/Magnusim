@@ -207,6 +207,10 @@ test.describe('Refine out to (fake compute)', () => {
     await reach.press('Tab');
     await expect.poll(async () => { const r = await refRecord(request, s); return [r.reach, r.reach_unit]; }, STEP).toEqual([30, 'mm']);
     await unit.selectOption('m');
+    // The unit saves at once (30 m); type the new distance once that save has landed, as its
+    // panel refresh puts the saved value back in the field.
+    await expect.poll(async () => { const r = await refRecord(request, s); return [r.reach, r.reach_unit]; }, STEP).toEqual([30, 'm']);
+    await expect(reach).toHaveValue('30');
     await reach.fill('0.025');
     await reach.press('Tab');
     await expect.poll(async () => { const r = await refRecord(request, s); return [r.reach, r.reach_unit]; }, STEP).toEqual([0.025, 'm']);
