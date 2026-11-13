@@ -220,7 +220,15 @@ test("cad:ux010-toolbar-sketch drag Slot from DRAW's More onto the bar: Spline g
     frame,
     'draw',
     'sketch.point',
-    async () => centre((await tb(frame).locator('[data-group="constrain"] .tb-items').boundingBox())!),
+    // On CONSTRAIN's buttons and off the open menu, which can cover the middle of CONSTRAIN when the
+    // window is narrow and the labels are wide (Linux fonts).
+    async () => {
+      const g = (await tb(frame).locator('[data-group="constrain"] .tb-items').boundingBox())!;
+      const m = await menu(frame).boundingBox();
+      const y = g.y + g.height / 2;
+      const x = m && m.x + m.width > g.x + g.width / 2 ? Math.min(g.x + g.width - 3, m.x + m.width + (g.x + g.width - m.x - m.width) / 2) : g.x + g.width / 2;
+      return { x, y };
+    },
     async () => {
       await expect(ghost(frame)).toHaveAttribute('data-drop', 'refused');
       await expect(tb(frame).locator('[data-group="constrain"]')).toHaveAttribute('data-drop-refused', '1');

@@ -1245,13 +1245,17 @@ function useToolbarDrag(bar: React.RefObject<HTMLDivElement | null>, live: React
       }
       hideTip();
       const at = show(ev.clientX, ev.clientY);
-      // From a More menu: it stays open until the pointer leaves it toward the bar (above it, or over the toolbar).
+      // From a More menu: it stays open until the pointer leaves it toward the bar (above it, onto a
+      // place it can go, or anywhere over the toolbar: another group's buttons, which refuse it, can
+      // sit lower than the menu's top when the toolbar's labels are taller).
       if (d.from === 'more') {
         const ui = uiFor(live.current.services);
         const menu = menuEl();
         if (menu && ui.state.get().menu?.owner === `tb-more:${d.group}`) {
           const r = menu.getBoundingClientRect();
-          if (!rectHas(r, ev.clientX, ev.clientY) && (ev.clientY < r.top || at.kind !== 'none')) ui.closeMenu();
+          const barEl = bar.current;
+          const overBar = !!barEl && rectHas(barEl.getBoundingClientRect(), ev.clientX, ev.clientY);
+          if (!rectHas(r, ev.clientX, ev.clientY) && (ev.clientY < r.top || at.kind !== 'none' || overBar)) ui.closeMenu();
         }
       }
     };
