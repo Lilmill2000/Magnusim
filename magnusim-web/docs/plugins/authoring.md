@@ -680,9 +680,9 @@ if (g && !g.linked) {
 
 `python/tests/fixtures/edit-plugins/edit-demo/` is a complete example, driven by `e2e/geometry-actions.spec.js`.
 
-## Assistant tools in a workspace (unreleased)
+## Assistant tools in a workspace
 
-Not released yet (the next minor, 1.9): the host still reports 1.8, so a page checks that `ws.assistant` exists. A workspace page can offer **tools** that the app's assistant may call while the page is open. The user asks in words; the model picks a tool and its input; the app checks the input, asks the user when the tool needs it, and your handler runs in the page with the page's own state.
+Host API 1.9: on an older host `ws.assistant` is absent, so a page checks that it exists. A workspace page can offer **tools** that the app's assistant may call while the page is open. The user asks in words; the model picks a tool and its input; the app checks the input, asks the user when the tool needs it, and your handler runs in the page with the page's own state.
 
 ```ts test
 import { connect, type AssistantCall, type AssistantTool } from '@magnusim/workspace';
@@ -777,9 +777,9 @@ Your tools are not the only ones a turn in your workspace has. The app offers it
 - **Order and room.** In your workspace your tools come first, by name, then the app's, by name: the strict budget and the cloud cap of 40 go to yours first. With a local server the app's tools are left out first when the definitions don't fit, by their priority (the appearance tools first), and `core__show` last of all: a turn can always leave your workspace. The app's tools in a workspace take about 1,700 tokens of a local model's context.
 - **Pictures.** `core__view` (pictures of the app's 3D view) is not offered over a workspace: the app's viewer is under your page. If the model should see your page, give it a tool that returns `images`.
 
-## Workspace commands (unreleased)
+## Workspace commands
 
-Not released yet (the next minor, 1.9); a host without it ignores the key. A workspace lists its keyboard commands in a **commands file**: what each one is called, the keys it has by default and where it acts. Settings → Keybinds shows them beside the app's own keys and lets the person give each command other keys or none; the person's keys reach your page through its preferences.
+Host API 1.9; an older host ignores the key. A workspace lists its keyboard commands in a **commands file**: what each one is called, the keys it has by default and where it acts. Settings → Keybinds shows them beside the app's own keys and lets the person give each command other keys or none; the person's keys reach your page through its preferences.
 
 ```toml
 [[workspaces]]

@@ -1,6 +1,6 @@
 # Plugin API compatibility
 
-The host loads a plugin whose `api_version` has the same major version as its own (`cfddesk.registry.API_VERSION`). A minor version adds things; it never removes or changes what an older minor version offered, so a `1.0` plugin loads unchanged on a `1.1` host. The exceptions are a safety fix, listed under the version that made it (1.2 made `ws.data` paths stricter), and the app's look (1.9, unreleased): a workspace page follows the theme and the text and icon sizes the person sets, so its look changes with theirs (each with a way to keep the earlier look, below).
+The host loads a plugin whose `api_version` has the same major version as its own (`cfddesk.registry.API_VERSION`). A minor version adds things; it never removes or changes what an older minor version offered, so a `1.0` plugin loads unchanged on a `1.1` host. The exceptions are a safety fix, listed under the version that made it (1.2 made `ws.data` paths stricter), and the app's look (1.9): a workspace page follows the theme and the text and icon sizes the person sets, so its look changes with theirs (each with a way to keep the earlier look, below).
 
 ## Frozen at 1.9
 

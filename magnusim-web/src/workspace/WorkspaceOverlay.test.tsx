@@ -1104,7 +1104,7 @@ describe('the workspace overlay', () => {
       enter();
       expect(await replaced).toMatchObject({ result: true });
       expect($('#modal-confirm').hidden).toBe(true);
-      // Its guard and safe do (unreleased API 1.9; the CAD Assistant's keybind change): Cancel has the
+      // Its guard and safe do (API 1.9; the CAD Assistant's keybind change): Cancel has the
       // keyboard and Enter answers it, and nothing changes.
       const changed = call(port, 'ui.confirm', { title: 'Change a shortcut?', message: 'Set Rectangle to Shift+T?', confirmLabel: 'Change shortcut', guard: true, safe: true });
       await waitFor(() => expect($('#modal-confirm').hidden).toBe(false));
@@ -1172,7 +1172,7 @@ describe('the workspace overlay', () => {
     });
   });
 
-  describe("its page's tools for the app's Assistant (1.9, unreleased)", () => {
+  describe("its page's tools for the app's Assistant (1.9)", () => {
     const ADD = {
       name: 'add',
       title: 'Add to the counter',

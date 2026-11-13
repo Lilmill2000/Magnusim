@@ -599,7 +599,7 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
       get: () => launchFor(route.projectId, route.plugin, route.studyId),
       drop: () => dropLaunch(route.projectId, route.plugin, route.studyId),
     };
-    // The page's tools for the app's Assistant (1.9, unreleased) go to the page relay under this
+    // The page's tools for the app's Assistant (1.9) go to the page relay under this
     // bridge's own frame id, for the workspace this route names (never what the frame says), with
     // its title from the plugin's row for the texts the person reads.
     const frameId = newWorkspaceFrameId();
@@ -617,7 +617,7 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
       ...hooks,
       assistantTools: (reg) => publishWorkspaceTools(toolsScope, frameId, reg, invoke, (turn) => bridge.assistantTurn(turn)),
       assistantStop: (turn) => stopAnnouncedTurn(turn),
-      // Undo from the app's Assistant panel (1.9, unreleased): this frame's offers, asked back
+      // Undo from the app's Assistant panel (1.9): this frame's offers, asked back
       // through its bridge; the panel's presence in the welcome, and the frame's Ctrl+/ for it
       // (only while the frame has the keyboard: a page can't open the panel on its own).
       assistantUndoable: (turn, label) => offerWorkspaceUndo(toolsScope, frameId, turn, label, (t) => bridge.assistantUndo(t)),
@@ -629,7 +629,7 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
         return true;
       },
       assistantKeys: () => assistantKeys(),
-      // The app's look (1.9, unreleased): the frame's page follows it (the SDK sets its html).
+      // The app's look (1.9): the frame's page follows it (the SDK sets its html).
       appearance: () => frameAppearance(),
     };
     const bridge = new WorkspaceBridge(frame, new WorkspaceCalls(scope, bridgeHooks, launch), bridgeHooks);

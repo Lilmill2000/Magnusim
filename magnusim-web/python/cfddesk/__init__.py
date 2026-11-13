@@ -3,7 +3,7 @@
 import sys as _sys
 from pathlib import Path as _Path
 
-__version__ = "0.1.0"
+__version__ = "0.5.0"
 
 # magnusim_sdk ships beside this package (python/sdk), and this checkout's copy comes first.
 # Setup installs it into the venv too, but a venv shared by several checkouts maps it to

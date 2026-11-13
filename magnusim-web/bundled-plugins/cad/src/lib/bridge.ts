@@ -97,7 +97,7 @@ export interface EditApi {
 }
 
 /**
- * The tools this page offers the app's Assistant (unreleased host API 1.9, `ws.assistant`). Null on
+ * The tools this page offers the app's Assistant (host API 1.9, `ws.assistant`). Null on
  * a host whose SDK has no `ws.assistant`. A call's progress goes through the call itself
  * (`call.progress(fraction, label, {waiting})`; an older host ignores `waiting`).
  */
@@ -126,7 +126,7 @@ export interface Bridge {
   units(): UnitSystem;
   onUnits(fn: (u: UnitSystem) => void): () => void;
   /**
-   * The host's appearance now (unreleased: ws.context.appearance, updated by its 'appearance'
+   * The host's appearance now (host API 1.9: ws.context.appearance, updated by its 'appearance'
    * event). A host without it (feature detection: the context has no `appearance`) gives
    * LIGHT_APPEARANCE, and the Part stays light.
    */

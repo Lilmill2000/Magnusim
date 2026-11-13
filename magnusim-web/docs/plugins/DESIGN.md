@@ -72,7 +72,7 @@ Rules:
 1. Space on a 2 px grid. Between blocks, use the spacing tokens (4, 8, 12 … px). Inside a control, 2, 6 and 10 px are fine: the kit's own controls use them.
 2. Body text is 13 px. Hints are 11 px. Titles are 14 px semibold. Sentence case everywhere.
 3. One primary button per screen or card. Everything else is secondary, neutral or a link.
-4. Light and dark both come from the tokens. From 1.9 (unreleased) a workspace follows Settings → Appearance: `theme.css` holds the light and the dark set, chosen by `data-theme` on the page's `<html>`, which the host and the SDK set. Tokens mean dark needs no change from you. An on-screen canvas or plot follows the theme: it reads `ws.context.appearance?.theme` and redraws on `ws.on('appearance', …)`. A picture or recording kept as a file stays light whatever the theme: it is drawn with light colours read off an element that carries `data-theme="light"`. `ws.context.theme.name` stays `"light"`: it names the stylesheet, not the theme on screen.
+4. Light and dark both come from the tokens. From 1.9 a workspace follows Settings → Appearance: `theme.css` holds the light and the dark set, chosen by `data-theme` on the page's `<html>`, which the host and the SDK set. Tokens mean dark needs no change from you. An on-screen canvas or plot follows the theme: it reads `ws.context.appearance?.theme` and redraws on `ws.on('appearance', …)`. A picture or recording kept as a file stays light whatever the theme: it is drawn with light colours read off an element that carries `data-theme="light"`. `ws.context.theme.name` stays `"light"`: it names the stylesheet, not the theme on screen.
 
 ## 3. Layout anatomy
 

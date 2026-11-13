@@ -90,7 +90,7 @@ export interface WorkspaceContext {
    * ws.compute and ws.results need 1.3, ws.project.linkGeometry 1.5,
    * ws.nav.onLeave 1.6, ws.prefs and ws.project.geometrySource 1.7), or catch the
    * refusal: an older host rejects a call it does not know with code "not_allowed".
-   * `ws.assistant` (unreleased in 1.8: check that it exists).
+   * `ws.assistant` needs 1.9 (check that it exists).
    */
   hostVersion: string;
   /**
@@ -121,7 +121,7 @@ export interface WorkspaceContext {
    */
   assistantKeys?: string[] | null;
   /**
-   * The app's look (Appearance): light or dark, and the text and icon sizes (unreleased, 1.9;
+   * The app's look (Appearance): light or dark, and the text and icon sizes (1.9;
    * absent on an older host, whose pages are light). The `appearance` event says when it changes.
    */
   appearance?: Appearance;
@@ -547,8 +547,8 @@ export interface AssistantTool {
    */
   confirm?: string;
   /**
-   * Which of your tools a local model keeps when the tools don't all fit its context (unreleased,
-   * 1.9): 0 to 100, higher stays, default 50. The app's own tools go first, then yours, the
+   * Which of your tools a local model keeps when the tools don't all fit its context (1.9)
+   * : 0 to 100, higher stays, default 50. The app's own tools go first, then yours, the
    * lowest priority first (the later name among equals).
    */
   priority?: number;

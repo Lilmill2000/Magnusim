@@ -209,7 +209,7 @@ Rules:
 4. `requires_plugins = ["incompressible_flow>=1.0"]` loads those plugins first. Declare it when you build on their specs.
 5. `[files]` sets how much a workspace may keep in one project (`max_file_mb`, `max_total_mb`).
 6. Start actions have limits per place, and texts have length limits. [authoring.md](authoring.md), "Start actions (1.4)", has them all.
-7. `commands` in a `[[workspaces]]` row (1.9, unreleased) names the workspace's commands file, which Settings → Keybinds lists. [authoring.md](authoring.md), "Workspace commands (unreleased)", has its format.
+7. `commands` in a `[[workspaces]]` row (1.9) names the workspace's commands file, which Settings → Keybinds lists. [authoring.md](authoring.md), "Workspace commands", has its format.
 
 ## 6. register, service and jobs
 
@@ -455,8 +455,8 @@ The groups of calls (API.md, section 2, has each one):
 | `ws.results` | Show a finished case in the project's 3D view | 1.3 |
 | `ws.project` | Project info, `linkGeometry`, `linkedGeometry` | 1.1, 1.5 |
 | `ws.on` | `units`, `theme`, `study`, `geometry` events | 1.1, 1.5 |
-| `ws.assistant` | Tools the app's assistant may call while the workspace is open | 1.9 (unreleased) |
-| `ws.assistant.docked`, `setUndo`, `onUndo` | The app's Assistant panel: its Stop and "Undo these changes" for a turn, and Ctrl+/ from the page | 1.9 (unreleased) |
+| `ws.assistant` | Tools the app's assistant may call while the workspace is open | 1.9 |
+| `ws.assistant.docked`, `setUndo`, `onUndo` | The app's Assistant panel: its Stop and "Undo these changes" for a turn, and Ctrl+/ from the page | 1.9 |
 | `ws.spawnWorker` | A worker running your module | 1.1 |
 
 Rules:
@@ -524,7 +524,7 @@ A study kind with `links_geometry = true` can link one project geometry. Its des
 
 ### Offering tools to the assistant
 
-A workspace page can offer tools that the app's assistant may call while the page is open: "add 2 to the counter", "show the polar". This is unreleased (the next minor, 1.9): the host still says 1.8, so check that `ws.assistant` exists.
+A workspace page can offer tools that the app's assistant may call while the page is open: "add 2 to the counter", "show the polar". This is host API 1.9: on an older host `ws.assistant` is absent, so check that it exists.
 
 ```ts test
 import { connect, type AssistantTool } from '@magnusim/workspace';
@@ -573,7 +573,7 @@ Rules:
 6. **Say how to fix it, and name what you did.** A thrown error may carry a `hint` (one sentence: how to fix it) and a `detail` (plain JSON: the field, the candidates, the range); the model reads both with the message. A result's `summary` is the turn log's line for the call, never the model's.
 7. **Hear the turn.** `assistant.onTurn(fn)` tells you when a request of the person's starts, changes and ends (its `title`, the steps and money it used); `assistant.stop(turn)` stops one told to your tab. Listen before you register.
 
-[authoring.md](authoring.md), "Assistant tools in a workspace (unreleased)", has the whole contract, and [compatibility.md](compatibility.md), "Unreleased additions (next minor, 1.9)", the bridge messages and codes.
+[authoring.md](authoring.md), "Assistant tools in a workspace", has the whole contract, and [compatibility.md](compatibility.md), "1.9", the bridge messages and codes.
 
 ## 10. Environments
 

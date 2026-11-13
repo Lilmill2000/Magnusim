@@ -50,8 +50,7 @@
  * progress goes to the page as `sourceProgress`), project.geometryFaces answers its face
  * table, and project.linkGeometry passes `originalNames` for the link that adopts it.
  *
- * Tools for the app's assistant (unreleased, next minor 1.9; HOST_API_VERSION stays 1.8 until it
- * ships): the page offers tools with assistant.register; the host checks their shape and hands
+ * Tools for the app's assistant (host API 1.9): the page offers tools with assistant.register; the host checks their shape and hands
  * them to hooks.assistantTools, which answers the app's verdict (bounded at 5 s: past that the
  * page hears `not_connected` and that list is abandoned). invokeTool runs one call at a time: the
  * event `assistantInvoke`, then the page's assistant.progress (each resets the call's stall
@@ -65,7 +64,7 @@
  * relay), and the page's assistant.stop {turn} goes to hooks.assistantStop, which stops only a
  * turn told to this tab.
  *
- * Undo from the app's Assistant panel (the dock; unreleased, 1.9): the page says which turn's
+ * Undo from the app's Assistant panel (the dock; 1.9): the page says which turn's
  * changes it can undo now as one step (assistant.undoable {turn, label|null}; only a turn told to
  * this page; hooks.assistantUndoable hears each offer and its withdrawal, and every offer goes with
  * the channel). assistantUndo(turn) asks the page (the event `assistantUndo {req, turn}`, answered
@@ -73,7 +72,7 @@
  * runs and no tool call runs, one at a time. The welcome's `assistantDock` says the host has the
  * panel (hooks.assistantDocked), and the page's Ctrl+/ comes as assistant.dock (hooks.assistantDockKey).
  *
- * The welcome's `appearance` is the app's look (hooks.appearance; 1.9, unreleased), and each change
+ * The welcome's `appearance` is the app's look (hooks.appearance; 1.9), and each change
  * of it the window hears (APPEARANCE_EVENT) goes to the page as the `appearance` event, once per
  * look: the SDK shows it on the page's <html>.
  */
@@ -224,7 +223,7 @@ interface LeaveRun {
   inFlight: number;
 }
 
-/** A tool call of the app's assistant that the page runs (1.9, unreleased), as the bridge tells it what happens. */
+/** A tool call of the app's assistant that the page runs (1.9), as the bridge tells it what happens. */
 interface InvokeRun {
   /** The id the page has (`ai-<n>`). */
   id: string;
@@ -253,7 +252,7 @@ const NOT_HOOK_WORK = new Set([
   'nav.leaveHook',
   'nav.back',
   'results.openIn3D',
-  // The assistant's own messages (1.9, unreleased): no work of a leave's hook, nor of a tool call.
+  // The assistant's own messages (1.9): no work of a leave's hook, nor of a tool call.
   'assistant.register',
   'assistant.progress',
   'assistant.result',
@@ -319,35 +318,35 @@ export interface BridgeHooks {
   /** The camera the page wants the project's viewport to land with (API 1.6, LINK 6.6): the last one wins. */
   linkView?(view: ViewState): void;
   /**
-   * The page's tools for the app's assistant (1.9, unreleased), checked here, or null when the
+   * The page's tools for the app's assistant (1.9), checked here, or null when the
    * page went away (its channel ended). Answers the app's verdict; the bridge waits for it
    * ASSISTANT_REGISTER_MS and then calls `abandon()`: that list must never reach the assistant,
    * and is withdrawn if its verdict comes late. No hook: the page hears `no_assistant`.
    */
   assistantTools?(reg: CheckedAssistantTools | null): AssistantPublication;
   /**
-   * The page's assistant.stop (1.9, unreleased): stop that turn of the app's assistant, only when
+   * The page's assistant.stop (1.9): stop that turn of the app's assistant, only when
    * it was told to this tab (else `not_this_tab`). No hook: the page hears `no_assistant`.
    */
   assistantStop?(turn: string): Promise<AssistantStopAnswer>;
   /**
    * The page offers to undo a turn's changes as one step (`label` names it), or no longer does
-   * (null; also for each offer when its channel ends) (1.9, unreleased). Only a turn told to this
+   * (null; also for each offer when its channel ends) (1.9). Only a turn told to this
    * page reaches it. No hook: the page hears `no_assistant`.
    */
   assistantUndoable?(turn: string, label: string | null): void;
-  /** Whether the host shows its Assistant panel (the welcome's `assistantDock`; 1.9, unreleased). */
+  /** Whether the host shows its Assistant panel (the welcome's `assistantDock`; 1.9). */
   assistantDocked?(): boolean;
-  /** The page's Ctrl+/ (assistant.dock; 1.9, unreleased): true when the panel took it. */
+  /** The page's Ctrl+/ (assistant.dock; 1.9): true when the panel took it. */
   assistantDockKey?(): boolean;
   /**
    * The panel's keys the person chose (the welcome's `assistantKeys`, again as the `assistantKeys`
-   * event when the window hears ASSISTANT_KEYS_EVENT), or null for its default (1.9, unreleased).
+   * event when the window hears ASSISTANT_KEYS_EVENT), or null for its default (1.9).
    */
   assistantKeys?(): string[] | null;
   /**
    * The app's look as the page gets it (the welcome's `appearance`, again as the `appearance` event
-   * when the window hears APPEARANCE_EVENT; 1.9, unreleased): the theme on screen, never a light
+   * when the window hears APPEARANCE_EVENT; 1.9): the theme on screen, never a light
    * swap of html for one task. No hook: the welcome has none, and the page stays light.
    */
   appearance?(): Appearance;
@@ -356,7 +355,7 @@ export interface BridgeHooks {
 /** What hooks.assistantTools answers: the verdict to come, and how to drop a list it was too late for. */
 export type AssistantPublication = Promise<AssistantRegistration> & { abandon?(): void };
 
-/** A tool of the page as the host passes it on (1.9, unreleased): its shape checked, its texts cleaned. */
+/** A tool of the page as the host passes it on (1.9): its shape checked, its texts cleaned. */
 export interface CheckedTool {
   /** The page's own name for it (the app checks its spelling). */
   name: string;
@@ -376,7 +375,7 @@ export interface CheckedTool {
   priority?: number;
 }
 
-/** Review rounds as the host passes them on (1.9, unreleased): 1 to 5 rounds, the prompt cleaned (its lines kept), at most 1500 characters. */
+/** Review rounds as the host passes them on (1.9): 1 to 5 rounds, the prompt cleaned (its lines kept), at most 1500 characters. */
 export interface CheckedReview {
   rounds: number;
   prompt: string;
@@ -389,7 +388,7 @@ export interface CheckedAssistantTools {
   review?: CheckedReview;
 }
 
-/** A tool call's result as it leaves the page (1.9, unreleased): images as base64. */
+/** A tool call's result as it leaves the page (1.9): images as base64. */
 export interface AssistantCallResult {
   text?: string;
   data?: unknown;
@@ -399,7 +398,7 @@ export interface AssistantCallResult {
 }
 
 /**
- * How a tool call ended (1.9, unreleased): the page's result, or a code with its message, and
+ * How a tool call ended (1.9): the page's result, or a code with its message, and
  * from the page's own error how to fix it (`hint`) and plain JSON about it (`detail`).
  */
 export type AssistantCallOutcome = { ok: true; result: AssistantCallResult } | { ok: false; code: string; message: string; hint?: string; detail?: unknown };
@@ -559,7 +558,7 @@ function assistantTimeoutS(v: unknown, fallback = ASSISTANT_TIMEOUT_S): number {
 }
 
 /**
- * assistant.register's params checked (1.9, unreleased): `bad_request` for a list that is not one,
+ * assistant.register's params checked (1.9): `bad_request` for a list that is not one,
  * more than 32 tools, a tool that is not `{name, description, inputSchema, ...}` or an input schema
  * that is not plain JSON, a title, confirm note or guide that is not text, a review that is not
  * `{rounds: 1 to 5, prompt: text}` (its prompt not empty once cleaned); `too_large` past 512 KB.
@@ -647,7 +646,7 @@ async function blobBase64(blob: Blob): Promise<string> {
 }
 
 /**
- * A page error as the call's outcome (1.9, unreleased): its code from the page's list, or the
+ * A page error as the call's outcome (1.9): its code from the page's list, or the
  * SDK's own `no_tool` (else `failed`); its message cleaned (at most 2000 characters); its hint
  * cleaned (at most 500); its detail when it is plain JSON of at most 4 KB. A detail it can't
  * keep is dropped, and the message says so: " (detail too large)", " (detail not plain JSON)".
@@ -669,7 +668,7 @@ function assistantPageError(raw: unknown): AssistantCallOutcome {
 }
 
 /**
- * The page's assistant.result as the call's outcome (1.9, unreleased): its error (above); its
+ * The page's assistant.result as the call's outcome (1.9): its error (above); its
  * result checked (`bad_result`: not `{text?, data?, images?, summary?}` with text, plain JSON
  * data, PNG, JPEG or WebP Blobs and a text summary) and capped (`too_large`: text over 64 KB,
  * data over 256 KB as JSON, more than 4 images or one over 1.5 MB), its images read to base64,
@@ -969,7 +968,7 @@ export class WorkspaceCalls {
   private readonly launch: LaunchSource | null;
   /** project.geometrySource reads in flight, by the page's token (API 1.7). */
   private readonly sourceReads = new Map<string, AbortController>();
-  /** The page's tools the app's assistant accepted, by name (1.9, unreleased); null before any. */
+  /** The page's tools the app's assistant accepted, by name (1.9); null before any. */
   private assistantTools: Map<string, CheckedTool> | null = null;
   /** The tool call the page runs (one at a time), and the last call id given (`ai-<n>`). */
   private invoke: InvokeRun | null = null;
@@ -1002,7 +1001,7 @@ export class WorkspaceCalls {
 
   /** A leave starts running the page's hook: what happens goes to `run.activity` until it ends. */
   beginLeave(run: { id: string; activity: (a: LeaveActivity) => void; done: (out: LeaveHookOutcome) => void; interactive: boolean }): void {
-    // A tool call of the app's assistant stops first: the page is about to close (1.9, unreleased).
+    // A tool call of the app's assistant stops first: the page is about to close (1.9).
     // It ran until now, so its page may have done some or all of it.
     this.invoke?.cancel('leaving', 'its page is closing (the user is leaving the workspace) and it was stopped; it may or may not have finished');
     this.leave = { id: run.id, activity: run.activity, done: run.done, linkError: null, inFlight: 0 };
@@ -1022,7 +1021,7 @@ export class WorkspaceCalls {
     return this.leave !== null;
   }
 
-  /** The page's tool the app's assistant accepted by that name (1.9, unreleased), or null. */
+  /** The page's tool the app's assistant accepted by that name (1.9), or null. */
   assistantTool(name: string): CheckedTool | null {
     return this.assistantTools?.get(name) ?? null;
   }
@@ -1069,7 +1068,7 @@ export class WorkspaceCalls {
       run.inFlight += 1;
       this.note({ kind: 'calls', inFlight: run.inFlight });
     }
-    // A tool call's stall window waits for the calls the page makes while it runs (1.9, unreleased).
+    // A tool call's stall window waits for the calls the page makes while it runs (1.9).
     const inv = this.invoke;
     if (inv) {
       inv.inFlight += 1;
@@ -1169,7 +1168,7 @@ export class WorkspaceCalls {
       assistantKeys: this.hooks.assistantKeys?.() ?? null,
       ...(appearance ? { appearance } : {}),
       // Magnusim CAD refuses the link calls (NOT_IN_CAD_EDITION): the page hears so at once, to
-      // leave out what only matters to a simulation (1.9, unreleased). Absent where links work.
+      // leave out what only matters to a simulation (1.9). Absent where links work.
       ...(isCad() ? { projectLinks: false } : {}),
     };
   }
@@ -1454,7 +1453,7 @@ export class WorkspaceCalls {
         const caseRel = text(params.caseRel, 'caseRel', 240);
         return { opened: (await this.hooks.openResults(caseRel)) === true };
       }
-      // Tools for the app's assistant (1.9, unreleased): the page's list, then each call's progress and end.
+      // Tools for the app's assistant (1.9): the page's list, then each call's progress and end.
       case 'assistant.register':
         return this.registerAssistantTools(params);
       case 'assistant.progress': {
@@ -1478,7 +1477,7 @@ export class WorkspaceCalls {
         return this.readAttachment(params);
       case 'assistant.stop':
         return this.stopAssistantTurn(params.turn);
-      // Undo from the app's Assistant panel (1.9, unreleased): the page's offers and its answers.
+      // Undo from the app's Assistant panel (1.9): the page's offers and its answers.
       case 'assistant.undoable':
         return this.offerUndo(params.turn, params.label);
       case 'assistant.undone': {
@@ -1503,7 +1502,7 @@ export class WorkspaceCalls {
   }
 
   /**
-   * assistant.attachment {call, id} (1.9, unreleased): a file attached in the conversation of the
+   * assistant.attachment {call, id} (1.9): a file attached in the conversation of the
    * running tool call's turn, for that call only (`call` is its `ai-<n>`) and only while it runs,
    * as {blob, fileName, size, sha256}. not_allowed for any other call, one that ended (a read
    * still going when it ends stops), or a call whose caller reads no attachment; bad_request for
@@ -1531,7 +1530,7 @@ export class WorkspaceCalls {
   }
 
   /**
-   * assistant.register (1.9, unreleased): the page's tools, checked, go to the app (hooks.assistantTools)
+   * assistant.register (1.9): the page's tools, checked, go to the app (hooks.assistantTools)
    * and the page gets its verdict, or `not_connected` when none came within ASSISTANT_REGISTER_MS (that
    * list is abandoned then). Only the verdict of the page's last register, in this channel, is kept.
    */
@@ -1584,7 +1583,7 @@ export class WorkspaceCalls {
   }
 
   /**
-   * assistant.stop {turn} (1.9, unreleased): the app stops that turn of its assistant when it was
+   * assistant.stop {turn} (1.9): the app stops that turn of its assistant when it was
    * told to this tab (hooks.assistantStop). `bad_request` for a turn that is not an id; the answer
    * is always {stopped, reason?}.
    */
@@ -1603,7 +1602,7 @@ export class WorkspaceCalls {
   }
 
   /**
-   * A turn of the app's assistant was told to this channel's page (1.9, unreleased): only such a
+   * A turn of the app's assistant was told to this channel's page (1.9): only such a
    * turn may be offered for undo, and none is undone while one of them runs.
    */
   noteTurn(turn: AssistantTurn): void {
@@ -1628,7 +1627,7 @@ export class WorkspaceCalls {
   }
 
   /**
-   * assistant.undoable {turn, label} (1.9, unreleased): the page can undo that turn's changes now
+   * assistant.undoable {turn, label} (1.9): the page can undo that turn's changes now
    * as one step (label null: no longer). Only a turn told to this page; `bad_request` for a turn
    * that is not an id or a label that is not text. A label that cleans to nothing reads
    * "Assistant: <title>".
@@ -2442,7 +2441,7 @@ export class WorkspaceCalls {
     this.leaveHookOn = false;
     this.setInteractive(true);
     run?.done({ ok: false, message: 'its page closed before it finished' });
-    // A tool call of the app's assistant ends `closed` first, then the page's tools go (1.9, unreleased):
+    // A tool call of the app's assistant ends `closed` first, then the page's tools go (1.9):
     // a list still waiting for its verdict is abandoned, and the app hears null.
     // The same words as the server's when the page's answer misses its grace: it may have run.
     this.invoke?.cancel('closed', 'its page closed before the tool finished; it may or may not have finished');
@@ -2456,7 +2455,7 @@ export class WorkspaceCalls {
       }
     }
     this.assistantWaiting.clear();
-    // Undo from the app's panel (1.9, unreleased): an undo asked for ends `closed`, and the offers go.
+    // Undo from the app's panel (1.9): an undo asked for ends `closed`, and the offers go.
     this.undoWait?.done({ undone: false, reason: 'closed' });
     this.undoWait = null;
     for (const turn of [...this.undoOffers.keys()]) {
@@ -2673,7 +2672,7 @@ export class WorkspaceBridge {
   }
 
   /**
-   * Run one call of the page's tool for the app's assistant (1.9, unreleased): the event
+   * Run one call of the page's tool for the app's assistant (1.9): the event
    * `assistantInvoke`, then the page's assistant.result. Refused at once with `closed` (no page),
    * `leaving` (its exit hook runs), `busy` (the frame is covered, or a call runs: one at a time),
    * `no_tool` (no such tool accepted) or `aborted`. It fails `stalled` after `timeoutS` with no
@@ -2871,7 +2870,7 @@ export class WorkspaceBridge {
   };
 
   /**
-   * A turn of the app's assistant bound to this tab started, changed or ended (1.9, unreleased):
+   * A turn of the app's assistant bound to this tab started, changed or ended (1.9):
    * the page hears it as the event `assistantTurn` (nothing while its page is not connected).
    */
   assistantTurn(turn: AssistantTurn): void {
@@ -2887,7 +2886,7 @@ export class WorkspaceBridge {
   }
 
   /**
-   * The app's Assistant panel asks the page to undo a turn's changes (1.9, unreleased): the event
+   * The app's Assistant panel asks the page to undo a turn's changes (1.9): the event
    * `assistantUndo {req, turn}`, then the page's assistant.undone. Refused at once, with nothing
    * sent, when there is no page (`closed`) or calls.undoRefusal says why (`not_offered`, `leaving`,
    * `busy`), and `busy` while the frame is covered (the app's dialog over it: the page may be in

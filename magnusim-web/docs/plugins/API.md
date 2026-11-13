@@ -321,7 +321,7 @@ A tool the app's assistant may call while this workspace is open (1.9). The app 
 - `risk: AssistantRisk`
 - `timeoutS?: number | undefined`: Seconds with no progress before the call counts as stalled (1–600, default 60). Progress resets it; there is no total limit.
 - `confirm?: string | undefined`: For a `destructive` tool: what the app's question before each call says the call does, in place of "can't be undone" (1.9). One sentence of fixed text, at most 120 characters, with no project data ("Deletes features from the Part; Ctrl+Z brings them back.").
-- `priority?: number | undefined`: Which of your tools a local model keeps when the tools don't all fit its context (unreleased, 1.9): 0 to 100, higher stays, default 50. The app's own tools go first, then yours, the lowest priority first (the later name among equals).
+- `priority?: number | undefined`: Which of your tools a local model keeps when the tools don't all fit its context (1.9) : 0 to 100, higher stays, default 50. The app's own tools go first, then yours, the lowest priority first (the later name among equals).
 
 #### AssistantTurn
 
@@ -882,12 +882,12 @@ interface WorkspaceContext
 - `study: StudyRecord`
 - `units: UnitSystem`
 - `theme: ThemeInfo`
-- `hostVersion: string`: The host's bridge API version ("1.7"). To use a call a later host added, compare it as numbers, major then minor (ws.nav.setDirty needs 1.2, ws.compute and ws.results need 1.3, ws.project.linkGeometry 1.5, ws.nav.onLeave 1.6, ws.prefs and ws.project.geometrySource 1.7), or catch the refusal: an older host rejects a call it does not know with code "not_allowed". `ws.assistant` (unreleased in 1.8: check that it exists).
+- `hostVersion: string`: The host's bridge API version ("1.7"). To use a call a later host added, compare it as numbers, major then minor (ws.nav.setDirty needs 1.2, ws.compute and ws.results need 1.3, ws.project.linkGeometry 1.5, ws.nav.onLeave 1.6, ws.prefs and ws.project.geometrySource 1.7), or catch the refusal: an older host rejects a call it does not know with code "not_allowed". `ws.assistant` needs 1.9 (check that it exists).
 - `geometry?: EditedGeometry | null | undefined`: The project geometry this study edits (host 1.7; absent on an older host): the one the user chose "Edit in …" on (a `[[geometry_actions]]` entry), or the one this study links. null for a study that edits no project geometry. Read its file with ws.project.geometrySource() and its faces with ws.project.geometryFaces().
 - `launch?: LaunchTarget | null | undefined`: What the user right-clicked to open this page (host 1.7): a face label ("face 3@Body1") or a body ("Body1") of `geometry`, from the viewport's menu. Given once, to the page load the action opened; a reload has none. null or absent otherwise.
 - `assistantDock?: boolean | undefined`: The app shows its own Assistant panel, which offers the person Stop and "Undo these changes" for a turn (1.9; absent on an older host). ws.assistant.docked reads it.
 - `assistantKeys?: string[] | null | undefined`: The keys that open and close the app's Assistant panel when the person changed them in Settings → Keybinds: combos as a commands file writes them (Cmd counts as Ctrl), [] when they left it no key. null for its default, Ctrl+/ (Cmd+/ on macOS) on the key that types "/" (1.9; absent on an older host). The `assistantKeys` event says when they change. While docked the page leaves these keys to the app (ws.assistant.docked): no command of its own should answer them.
-- `appearance?: Appearance | undefined`: The app's look (Appearance): light or dark, and the text and icon sizes (unreleased, 1.9; absent on an older host, whose pages are light). The `appearance` event says when it changes.
+- `appearance?: Appearance | undefined`: The app's look (Appearance): light or dark, and the text and icon sizes (1.9; absent on an older host, whose pages are light). The `appearance` event says when it changes.
 - `projectLinks?: boolean | undefined`: false: this app takes no study's design into a project as a geometry, so it runs no simulation of it (Magnusim CAD). ws.project.linkGeometry, linkedGeometry and followGeometry are refused there (`not_allowed`); leave out what only matters to a simulation (1.9). Absent where they work, and on an older host: read absent as true.
 
 #### AssistantHandler

@@ -1,5 +1,5 @@
-// Undo from the app's Assistant panel, the page's store (src/workspace/assistantTools.ts; unreleased,
-// next host minor 1.9): each frame's undo offers in the snapshot by turn, the dock's
+// Undo from the app's Assistant panel, the page's store (src/workspace/assistantTools.ts; host
+// API 1.9): each frame's undo offers in the snapshot by turn, the dock's
 // undoWorkspaceTurn asking the frame that offers it, a frame that goes taking its offers, and the
 // dock's own registration (setWorkspaceDock).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -21,7 +21,7 @@ const SCOPE: WorkspaceToolsScope = { project_id: 'proj-a', plugin: 'ai-demo', wo
 beforeEach(() => resetWorkspaceToolsForTests());
 afterEach(() => resetWorkspaceToolsForTests());
 
-describe("undo offers in the page's store (1.9, unreleased)", () => {
+describe("undo offers in the page's store (1.9)", () => {
   it('an offer shows in the snapshot by turn (a new snapshot each change); null from its frame withdraws it, from another frame does not', async () => {
     const heard = vi.fn();
     const off = subscribeWorkspaceTools(heard);
