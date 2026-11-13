@@ -7,6 +7,7 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync, createReadStream, statSync } from 'node:fs';
+import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -203,6 +204,9 @@ describe('import_file', () => {
       [true, true],
       'nothing left open on the file',
     );
+    // A stream destroyed before its open finished still opens, then closes: wait for
+    // that here, or the next test's fresh() removes the file under it (ENOENT later).
+    await Promise.all(streams.map((s) => (s.closed ? null : once(s, 'close'))));
   });
   it('neither a file nor a path: needs_file, with the way the person gives one', async () => {
     const r = await sent(importFileTool(deps()), imp({}));
