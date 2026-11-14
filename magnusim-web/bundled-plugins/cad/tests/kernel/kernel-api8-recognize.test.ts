@@ -310,7 +310,9 @@ describe8('recognize (API 8)', () => {
     // with the hunk, 2.26 s without (e1c42b60). max_faces lets the old kernel run it too.
     const p = prism(4998);
     const runs = [0, 1, 2].map(() => recognize(p, { holes: false, max_faces: 5000 }));
-    expect(Math.min(...runs.map((r) => r.timings.aag_ms as number))).toBeLessThan(1200);
+    // A shared CI runner (GitHub sets CI) took 1.76 s on 2026-11-14: it gets 3 s, which still
+    // catches the old kernel (about 3.6 times slower).
+    expect(Math.min(...runs.map((r) => r.timings.aag_ms as number))).toBeLessThan(process.env.CI ? 3000 : 1200);
     expect(noTimings(runs[1])).toEqual(noTimings(runs[0]));
     kit.release(p);
   }, 60_000);

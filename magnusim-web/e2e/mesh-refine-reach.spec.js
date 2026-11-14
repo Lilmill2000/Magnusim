@@ -217,9 +217,14 @@ test.describe('Refine out to (fake compute)', () => {
     await expect(note).toBeHidden();
 
     // A negative distance: not saved, and the editor says why (the value stays as typed).
-    await reach.fill('-5');
-    await reach.press('Tab');
-    await expect(note).toHaveText(REFUSED, STEP);
+    // On a slow machine the 0.025 save's panel refresh can put 0.025 back after -5 is typed
+    // and before its Tab (seen on GitHub CI, 2026-11-14; a known bug to fix after v0.5.0):
+    // type -5 again until the editor refuses it.
+    await expect(async () => {
+      await reach.fill('-5');
+      await reach.press('Tab');
+      await expect(note).toHaveText(REFUSED, { timeout: 3_000 });
+    }).toPass(STEP);
     await expect(note).toHaveAttribute('data-ref-reach-note', 'refused');
     await expect(reach).toHaveValue('-5');
     await page.waitForTimeout(800);

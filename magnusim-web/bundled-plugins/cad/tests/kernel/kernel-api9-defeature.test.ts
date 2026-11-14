@@ -149,7 +149,9 @@ describe8('defeature time budget (API 9)', () => {
       const plain = call(k, 'defeature', { id: body, faces });
       expect(plain.valid).toBe(true);
       expect(plain.warnings).toBe(false);
-      const timed = call(k, 'defeature', { id: body, faces, budget_ms: 20000, far_skip: true });
+      // The budget is only room for the heal to finish: a shared CI runner (GitHub sets CI)
+      // took over 20 s on 2026-11-14.
+      const timed = call(k, 'defeature', { id: body, faces, budget_ms: process.env.CI ? 100000 : 20000, far_skip: true });
       expect(timed.stopped, 'not skipped').toBeUndefined();
       expect(timed.far_grown).toBeUndefined();
       expect(brepBytes(timed.id)).toBe(brepBytes(plain.id));
@@ -165,7 +167,7 @@ describe8('defeature time budget (API 9)', () => {
     const heal = call(k, 'defeature', { id: box, faces: [one], budget_ms: 20000 });
     expect(heal).toMatchObject({ warnings: true, warning_text: 'BOPAlgo_AlertUnableToRemoveTheFeature' });
     kit.release(heal.id, box);
-  }, 120_000);
+  }, process.env.CI ? 400_000 : 120_000);
 
   it('refusals in words: a budget must be > 0', () => {
     const b = kit.box(10, 10, 10);
