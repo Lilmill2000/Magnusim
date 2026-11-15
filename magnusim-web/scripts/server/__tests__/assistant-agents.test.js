@@ -64,6 +64,9 @@ const { killOwn } = await import('./assistant-own-pids.js');
 
 const WIN = process.platform === 'win32';
 const LIMIT = { timeout: 120_000 };
+// A version probe that should answer gets 30 s, not the app's 3: a busy CI runner took over 3 s
+// to start one (GitHub, 2026-11-15). The 3 s limit itself has its own test (the --version that never answers).
+const PROBE_ROOM = 30_000;
 const CEILING = 10_000;
 /** Every probe's working folder goes here, never the system temp folder. */
 const TMP = join(ROOT, 'tmp');
@@ -370,7 +373,7 @@ describe('discovery on fake folders (spec 4.3)', () => {
   it('an npm prefix with the known shim and its package: [node, script], verified at the minimum version, tools off; the version from --version', LIMIT, async () => {
     const prefix = folder('prefix');
     const { script } = npmPrefix(prefix, { ...CLAUDE, version: '0.85.1', probeVersion: '0.85.1-probed' });
-    const d = await discover([prefix], { probe: true });
+    const d = await discover([prefix], { probe: true, probeMs: PROBE_ROOM });
     const e = entry(d, 'claude');
     assert.equal(e.found, true);
     assert.equal(e.program, join(prefix, 'claude-agent-acp.cmd'));
@@ -538,7 +541,7 @@ describe('discovery on fake folders (spec 4.3)', () => {
     assert.equal(lookalike.version, null, 'not asked');
     assert.deepEqual(runsOf(report), [], 'the lookalike never ran');
 
-    const own = entry(await discover([verified], { probe: true, refresh: true, env }), 'claude');
+    const own = entry(await discover([verified], { probe: true, refresh: true, env, probeMs: PROBE_ROOM }), 'claude');
     assert.equal(own.version, '0.85.1-probed');
     const [run] = runsOf(report);
     assert.equal(run.name, 'adapter');
@@ -550,7 +553,7 @@ describe('discovery on fake folders (spec 4.3)', () => {
     // Allowed for that very program (its fingerprint): asked.
     const s = S.defaultSettings();
     s.agents.claude = { model: null, mode: null, allowed: { fingerprint: lookalike.fingerprint, at: 'now' }, lockdown_failed: null };
-    const allowed = entry(await discover([planted, verified], { probe: true, refresh: true, env, settings: s }), 'claude');
+    const allowed = entry(await discover([planted, verified], { probe: true, refresh: true, env, settings: s, probeMs: PROBE_ROOM }), 'claude');
     assert.equal(allowed.version, '6.6.6');
     assert.deepEqual(runsOf(report).map((r) => r.name), ['adapter', 'lookalike']);
     // Allowed for another program: not asked.
@@ -562,7 +565,7 @@ describe('discovery on fake folders (spec 4.3)', () => {
     const grokDir = folder('pgrok');
     const grok = npmPrefix(grokDir, { pkg: '@xai-official/grok', program: 'grok', version: '1.0.49', bin: 'bin/grok.js' });
     reporter(grok.script, report, 'grok', '1.0.49');
-    assert.equal(entry(await discover([grokDir], { probe: true, refresh: true }), 'grok').version, '1.0.49');
+    assert.equal(entry(await discover([grokDir], { probe: true, refresh: true, probeMs: PROBE_ROOM }), 'grok').version, '1.0.49');
     assert.deepEqual(runsOf(report).at(-1).argv, ['--no-auto-update', '--version']);
   });
 
