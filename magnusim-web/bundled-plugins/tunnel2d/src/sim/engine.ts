@@ -6,7 +6,7 @@ import type { ColormapName } from '@magnusim/plugin-ui';
 import { hasOutline, outlineRings, referenceLength } from '../geometry/shapes';
 import { bakeSdf, type SdfGrid } from '../geometry/sdf';
 import { radiusRings, transformRings, type Rings } from '../geometry/polygon';
-import { Renderer, type Palette, type ViewXform } from '../render/renderer';
+import { Renderer, type Palette, type Present, type ViewXform } from '../render/renderer';
 import type { Drawn } from '../render/domain';
 import { FLUIDS, LIMITS, flowModelFor, type Body, type FieldMode, type Resolution, type Scene } from '../scene/scene';
 import { Dye, type DyeSource } from './dye';
@@ -229,6 +229,24 @@ export class Engine {
   /** Called right after each frame is submitted (captures read the GPU canvas then). */
   afterFrame: (() => void) | null = null;
 
+  /** How frames reach the screen (see Present). */
+  get present(): Present {
+    return this.renderer.present;
+  }
+
+  private shownWaiters: (() => void)[] = [];
+  /** Settles once the next frame is on the canvas. */
+  nextShown(): Promise<void> {
+    return new Promise((r) => this.shownWaiters.push(r));
+  }
+  private onShown(drawn: Drawn) {
+    this.drawn = drawn;
+    const waiters = this.shownWaiters;
+    this.shownWaiters = [];
+    for (const w of waiters) w();
+    this.afterFrame?.();
+  }
+
   /** Run one frame's worth of steps while paused. */
   stepOnce() {
     this.stepRequest = true;
@@ -257,12 +275,12 @@ export class Engine {
   /** Where the flow first went wrong (world metres) and the bodies' poses then. */
   unstableAt: { x: number; y: number; poses: { id: string; x: number; y: number; angle: number }[] } | null = null;
 
-  constructor(device: GPUDevice, canvas: HTMLCanvasElement, adapterName: string, palette: Palette) {
+  constructor(device: GPUDevice, canvas: HTMLCanvasElement, adapterName: string, palette: Palette, present: Present = 'canvas') {
     this.device = device;
     this.adapterName = adapterName;
     this.palette = palette;
     this.canvas = canvas;
-    this.renderer = new Renderer(device, canvas);
+    this.renderer = new Renderer(device, canvas, present);
     this.particles = new Particles(device);
     this.streamlines = new Streamlines(device, this.renderer.format);
     this.stats = { adapter: adapterName, nx: 0, ny: 0, stepsPerFrame: 0, mlups: 0, speedRatio: 0, simTime: 0, fps: 0, map: null, state: 'running' };
@@ -961,6 +979,9 @@ export class Engine {
     const scene = this.scene;
     const map = this.map;
     if (!solver || !scene || !map) return;
+    // Read back, the last frame is still on its way: no new one yet. A WebGPU canvas holds the
+    // page back the same way; without it a slow GPU's queue would grow without end.
+    if (this.renderer.waiting) return;
     const wall = this.lastFrame ? Math.min(100, now - this.lastFrame) : 16;
     this.lastFrame = now;
     this.fpsEma = this.fpsEma ? this.fpsEma * 0.9 + (1000 / Math.max(1, wall)) * 0.1 : 60;
@@ -1073,7 +1094,7 @@ export class Engine {
       this.streamlines.encodeTrace(enc, solver.macroBuf, solver, Math.max(0, solver.absorbInX) + 1, Math.max(8, lines));
     }
     const size = this.renderer.size;
-    this.drawn = { scale: Math.fround(lv.scale), ox: Math.fround(lv.ox), oy: Math.fround(lv.oy), nx: solver.nx, ny: solver.ny, w: size.w, h: size.h };
+    const drawn: Drawn = { scale: Math.fround(lv.scale), ox: Math.fround(lv.ox), oy: Math.fround(lv.oy), nx: solver.nx, ny: solver.ny, w: size.w, h: size.h };
     const markers = (view.tracers || view.field === 'particles') && this.particles.tracerCount > 0;
     if (markers && mc) {
       const dpr = this.worldView.dpr;
@@ -1131,7 +1152,12 @@ export class Engine {
     const t0 = performance.now();
     this.device.queue.submit([enc.finish()]);
     this.simTime += steps * map.dt;
-    this.afterFrame?.();
+    // Read back (the tests on GitHub's runners): the frame is on the canvas once its pixels are back.
+    // `drawn` is the frame on the canvas: read back, it is that frame's once its pixels are there
+    // (the overlay's dark margins follow it, so a pan never shows the light one meanwhile).
+    const shown = this.renderer.shown();
+    if (shown) void shown.then((on) => on && this.onShown(drawn));
+    else this.onShown(drawn);
 
     if (steps > 0) {
       void this.device.queue.onSubmittedWorkDone().then(() => {

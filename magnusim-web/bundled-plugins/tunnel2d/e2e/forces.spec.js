@@ -14,8 +14,8 @@
 //    inlet and the open edges hold the wind plus the airfoil's far vortex, its circulation from
 //    its lift), and turns up ahead of it; a walled tunnel's inlet holds the plain wind.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { expect, test } from '@playwright/test';
-import { newTunnel, openTunnel, pageXY, scaledTimeout, scene, T, useTunnelHost, worldToPage } from './helpers.js';
+import { expect } from '@playwright/test';
+import { newTunnel, openTunnel, pageXY, scaledTimeout, scene, T, test, useTunnelHost, worldToPage } from './helpers.js';
 
 const env = useTunnelHost('tunnel2d-forces');
 

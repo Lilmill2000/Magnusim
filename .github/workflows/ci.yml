@@ -101,9 +101,22 @@ jobs:
       # runner its config asks for Chrome's software adapter (SwiftShader). Its page and UI tests
       # run here; the ones that need the flow to develop (the benchmark, drags, the soak) skip
       # and say why: they run wherever there is a GPU.
-      - run: npx playwright test -c bundled-plugins/tunnel2d/e2e/playwright.config.js
+      # Chrome here cannot show a WebGPU canvas (it loses its GPU process, or draws nothing), so
+      # the tunnel shows its frames read back onto a 2D canvas (MAGNUSIM_E2E_PRESENT, the tests
+      # check the page took it); the frames are drawn as in the app. Chrome's own log is kept:
+      # one line of it saying the GPU was lost fails this step, even when every test passed.
+      - name: 2D Wind Tunnel browser suite
+        shell: bash
+        run: |
+          set -o pipefail
+          npx playwright test -c bundled-plugins/tunnel2d/e2e/playwright.config.js 2>&1 | tee "$RUNNER_TEMP/tunnel2d.log"
+          n=$(grep -acE "Unable to create shared image|Instance reference no longer exists|Unable to initialize SkSurface" "$RUNNER_TEMP/tunnel2d.log" || true)
+          echo "GPU lost lines: $n"
+          [ "$n" = 0 ]
         env:
           CI: "1"
+          MAGNUSIM_E2E_PRESENT: readback
+          DEBUG: pw:browser
       # The Heat Transfer plugin's browser suite (it ships on). Its study, BC, monitor and
       # results tests run here on committed cases; the ones that mesh or solve skip (no WSL).
       - run: npx playwright test -c bundled-plugins/heat_transfer/e2e/playwright.config.js

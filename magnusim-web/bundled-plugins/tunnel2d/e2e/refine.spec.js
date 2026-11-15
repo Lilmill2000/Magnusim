@@ -12,8 +12,8 @@
 //    each): the GPU work stays valid (a group's old patches were destroyed before the frame
 //    that copies from them was submitted, which dropped that frame), and the flow runs on.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { expect, test } from '@playwright/test';
-import { newTunnel, openTunnel, pageXY, scaledTimeout, scene, stats, T, useTunnelHost } from './helpers.js';
+import { expect } from '@playwright/test';
+import { newTunnel, openTunnel, pageXY, scaledTimeout, scene, stats, T, test, useTunnelHost } from './helpers.js';
 
 const env = useTunnelHost('tunnel2d-refine');
 

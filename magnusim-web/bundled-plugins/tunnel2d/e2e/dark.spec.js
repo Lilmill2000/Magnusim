@@ -17,9 +17,9 @@
 // Appearance sets it (the host's applyAppearance, the frame following through the host) and is put
 // back after each test. At device pixel ratios 1 and 1.25.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { expect, test } from '@playwright/test';
+import { expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
-import { newTunnel, openTunnel, pngPixels, scaledTimeout, SLOW, T, useTunnelHost } from './helpers.js';
+import { newTunnel, openTunnel, pngPixels, scaledTimeout, SLOW, T, test, useTunnelHost } from './helpers.js';
 
 const env = useTunnelHost('tunnel2d-dark');
 
@@ -45,16 +45,11 @@ async function setTheme(page, frame, theme) {
   await expect.poll(() => frame.evaluate(() => document.documentElement.dataset.theme || 'light'), { message: "the tunnel's frame takes the app's theme" }).toBe(theme);
 }
 
-/** Wait for `n` frames of the tunnel's page. */
+/** Wait for `n` frames on the tunnel's screen (read back: frames the GPU finished, a slow one's far apart). */
 const rafs = (frame, n = 3) =>
-  frame.evaluate(
-    (k) =>
-      new Promise((done) => {
-        const step = () => (--k <= 0 ? done() : requestAnimationFrame(step));
-        requestAnimationFrame(step);
-      }),
-    n,
-  );
+  frame.evaluate(async (k) => {
+    for (let i = 0; i < k; i++) await window.__TUNNEL__.nextFrame();
+  }, n);
 
 /**
  * The still scene: the airfoil selected and unlocked just under the top wall (its turn handle on the
@@ -498,6 +493,8 @@ for (const dpr of [1, 1.25]) {
               overlay: Array.from(o.getContext('2d').getImageData(3, 3, 1, 1).data),
               stage: getComputedStyle(document.querySelector('.t2d-stage')).backgroundColor,
               panel: getComputedStyle(document.querySelector('.t2d-side')).backgroundColor,
+              // For the message when it fails: the frame the overlay was drawn for, and its size.
+              why: { drawn: window.__TUNNEL__.domain().drawn, overlay: [o.width, o.height] },
             });
           });
         }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
@@ -506,7 +503,11 @@ for (const dpr of [1, 1.25]) {
       await expect.poll(() => T(frame, () => window.__switches.length)).toBe(1);
       await setTheme(page, frame, 'light');
       await expect.poll(() => T(frame, () => window.__switches.length)).toBe(2);
-      expect(await T(frame, () => window.__switches)).toEqual([
+      const switches = await T(frame, () => window.__switches);
+      expect(
+        switches.map(({ why, ...s }) => s),
+        `the frames after the switches (${JSON.stringify(switches.map((s) => s.why))})`,
+      ).toEqual([
         { theme: 'dark', overlay: [...DARK_MARGIN, 255], stage: 'rgb(27, 31, 39)', panel: 'rgb(27, 31, 39)' },
         { theme: 'light', overlay: [0, 0, 0, 0], stage: 'rgb(240, 242, 247)', panel: 'rgb(255, 255, 255)' },
       ]);
@@ -532,7 +533,7 @@ for (const dpr of [1, 1.25]) {
         const N = 60;
         for (let k = 0; k <= N; k++) {
           // After the engine's and the overlay's drawing of this frame (their loops asked first).
-          await new Promise((r) => requestAnimationFrame(r));
+          await t.nextFrame();
           c.width = gpu.width;
           c.height = gpu.height;
           const g = c.getContext('2d', { willReadFrequently: true });

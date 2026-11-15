@@ -10,8 +10,8 @@
 //    the flow still or drops it to a few steps a frame (the solver builds the other model's
 //    pipelines ahead of time; a frame held up once is not a slow GPU).
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { expect, test } from '@playwright/test';
-import { newTunnel, openTunnel, pageXY, scaledTimeout, scene, stats, T, useTunnelHost } from './helpers.js';
+import { expect } from '@playwright/test';
+import { newTunnel, openTunnel, pageXY, scaledTimeout, scene, stats, T, test, useTunnelHost } from './helpers.js';
 
 const env = useTunnelHost('tunnel2d-turb');
 

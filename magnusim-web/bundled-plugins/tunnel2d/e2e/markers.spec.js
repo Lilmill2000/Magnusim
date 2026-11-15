@@ -11,8 +11,8 @@
 //    turned on); the plain background shows the markers without a field or a legend; and
 //    focusing a control low in the side panel never scrolls the page (the toolbar stays).
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { expect, test } from '@playwright/test';
-import { newTunnel, openTunnel, scaledTimeout, scene, SLOW, stats, T, toggle, useTunnelHost, worldToPage } from './helpers.js';
+import { expect } from '@playwright/test';
+import { newTunnel, openTunnel, scaledTimeout, scene, SLOW, stats, T, test, toggle, useTunnelHost, worldToPage } from './helpers.js';
 
 const t = useTunnelHost('tunnel2d-markers');
 const KEEP_MS = process.env.MAGNUSIM_E2E_SOAK === '1' ? 300_000 : 30_000;

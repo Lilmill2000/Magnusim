@@ -11,8 +11,8 @@
 //    out of the flow; closing it brings the body in. Dragging a sketch point moves the
 //    outline while the solver keeps its relations; Undo puts it back.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { expect, test } from '@playwright/test';
-import { newTunnel, openTunnel, scaledTimeout, scene, T, useTunnelHost, worldToPage } from './helpers.js';
+import { expect } from '@playwright/test';
+import { newTunnel, openTunnel, scaledTimeout, scene, T, test, useTunnelHost, worldToPage } from './helpers.js';
 
 const env = useTunnelHost('tunnel2d-sketch');
 

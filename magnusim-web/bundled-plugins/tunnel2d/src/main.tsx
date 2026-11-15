@@ -89,7 +89,9 @@ async function main() {
 
   // The view's colours: light in every theme (pictures and recordings are drawn from it).
   const canvas = document.createElement('canvas');
-  const engine = new Engine(device, canvas, adapterName, viewPalette(themeScope('light')));
+  // The browser tests on GitHub's runners show frames read back (see Present): their page sets this.
+  const present = (window as { __T2D_PRESENT__?: unknown }).__T2D_PRESENT__ === 'readback' ? 'readback' : 'canvas';
+  const engine = new Engine(device, canvas, adapterName, viewPalette(themeScope('light')), present);
   applyViewColours(engine, themeScope('light'));
   // A new stylesheet from the host (none sends one yet): every colour is read again.
   ws.on('theme', () => {

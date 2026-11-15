@@ -18,7 +18,8 @@
 //    artefacts); the rheoscopic view keeps a sound flake field.
 // 7. Without WebGPU (no navigator.gpu, or no adapter), the page says why it cannot run.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { chromium, expect, test } from '@playwright/test';
+import { chromium, expect } from '@playwright/test';
+import { test } from './helpers.js';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { e2eTemp, NO_GEOMETRY_PROJECT, startHost } from '../../../e2e/support/plugin-suite.js';

@@ -64,9 +64,35 @@ export interface RheoLook {
   glint: number;
 }
 
+/**
+ * How a frame reaches the screen. 'canvas': the canvas's own WebGPU context, always in the
+ * app. 'readback': the frame is drawn into a texture of its own, read back and put on the
+ * canvas as a 2D picture, pixel for pixel the same, one frame behind. The browser tests on
+ * GitHub's Linux runners use it: Chrome there has no GPU and cannot show a WebGPU canvas at
+ * all (it loses its GPU process or draws nothing), while it computes and reads back fine.
+ */
+export type Present = 'canvas' | 'readback';
+
+/** A read-back frame on its way to the 2D canvas. */
+interface Readback {
+  buf: GPUBuffer;
+  w: number;
+  h: number;
+  /** Bytes per row in the buffer (a multiple of 256). */
+  bpr: number;
+  busy: boolean;
+}
+
 export class Renderer {
   private device: GPUDevice;
-  private ctx: GPUCanvasContext;
+  private canvas: HTMLCanvasElement;
+  private ctx: GPUCanvasContext | null = null;
+  private g2d: CanvasRenderingContext2D | null = null;
+  private target: GPUTexture | null = null;
+  private readbacks: Readback[] = [];
+  /** The read-back this frame copied into, until shown() hands it on. */
+  private copied: Readback | null = null;
+  readonly present: Present;
   readonly format: GPUTextureFormat;
   private pipe: GPURenderPipeline;
   private viewBuf: GPUBuffer;
@@ -75,13 +101,23 @@ export class Renderer {
   private dummyBuf: GPUBuffer;
   private dummyTex: GPUTexture;
 
-  constructor(device: GPUDevice, canvas: HTMLCanvasElement) {
+  constructor(device: GPUDevice, canvas: HTMLCanvasElement, present: Present = 'canvas') {
     this.device = device;
-    const ctx = canvas.getContext('webgpu');
-    if (!ctx) throw new Error('The canvas has no WebGPU context.');
-    this.ctx = ctx;
-    this.format = navigator.gpu.getPreferredCanvasFormat();
-    ctx.configure({ device, format: this.format, alphaMode: 'opaque' });
+    this.canvas = canvas;
+    this.present = present;
+    if (present === 'readback') {
+      const g = canvas.getContext('2d');
+      if (!g) throw new Error('The canvas has no 2D context.');
+      this.g2d = g;
+      // RGBA bytes in the order a 2D canvas takes them.
+      this.format = 'rgba8unorm';
+    } else {
+      const ctx = canvas.getContext('webgpu');
+      if (!ctx) throw new Error('The canvas has no WebGPU context.');
+      this.ctx = ctx;
+      this.format = navigator.gpu.getPreferredCanvasFormat();
+      ctx.configure({ device, format: this.format, alphaMode: 'opaque' });
+    }
     const module = device.createShaderModule({ code: renderShader(), label: 'tunnel render' });
     this.pipe = device.createRenderPipeline({
       layout: 'auto',
@@ -122,8 +158,80 @@ export class Renderer {
 
   /** The canvas's size in device pixels. */
   get size() {
+    if (!this.ctx) return { w: Math.max(1, this.canvas.width), h: Math.max(1, this.canvas.height) };
     const t = this.ctx.getCurrentTexture();
     return { w: t.width, h: t.height };
+  }
+
+  /** Read back: a frame is still on its way to the canvas (the engine draws no new one meanwhile). */
+  get waiting(): boolean {
+    return this.readbacks.some((r) => r.busy);
+  }
+
+  /** Where this frame is drawn: the canvas's texture, or (read back) a texture of the canvas's size. */
+  private frameTexture(): GPUTexture {
+    if (this.ctx) return this.ctx.getCurrentTexture();
+    const { w, h } = this.size;
+    if (!this.target || this.target.width !== w || this.target.height !== h) {
+      this.target?.destroy();
+      this.target = this.device.createTexture({ size: [w, h], format: this.format, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC, label: 'tunnel frame' });
+    }
+    return this.target;
+  }
+
+  /** Read back: copy the frame just drawn into a free buffer (none free: this frame is not shown, the next one is). */
+  private copyOut(enc: GPUCommandEncoder) {
+    const t = this.target;
+    if (!t) return;
+    const w = t.width;
+    const h = t.height;
+    const bpr = Math.ceil((w * 4) / 256) * 256;
+    let r = this.readbacks.find((x) => !x.busy && x.w === w && x.h === h);
+    if (!r) {
+      if (this.readbacks.filter((x) => x.busy).length >= 2) return;
+      for (const x of this.readbacks.filter((y) => !y.busy)) x.buf.destroy();
+      this.readbacks = this.readbacks.filter((x) => x.busy);
+      r = { buf: this.device.createBuffer({ size: bpr * h, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST, label: 'tunnel frame read back' }), w, h, bpr, busy: false };
+      this.readbacks.push(r);
+    }
+    enc.copyTextureToBuffer({ texture: t }, { buffer: r.buf, bytesPerRow: bpr }, [w, h]);
+    r.busy = true;
+    this.copied = r;
+  }
+
+  /**
+   * After the frame's submit. On the canvas: shown already, null. Read back: a promise that
+   * settles true once the frame is on the canvas (false when it was not copied, or the canvas
+   * changed size meanwhile).
+   */
+  shown(): Promise<boolean> | null {
+    if (this.ctx) return null;
+    const r = this.copied;
+    this.copied = null;
+    if (!r) return Promise.resolve(false);
+    return r.buf.mapAsync(GPUMapMode.READ).then(
+      () => {
+        const src = new Uint8Array(r.buf.getMappedRange());
+        const g = this.g2d;
+        let drawn = false;
+        if (g && this.canvas.width === r.w && this.canvas.height === r.h) {
+          const img = new ImageData(r.w, r.h);
+          const row = r.w * 4;
+          for (let y = 0; y < r.h; y++) img.data.set(src.subarray(y * r.bpr, y * r.bpr + row), y * row);
+          // Opaque, as the WebGPU canvas is ('opaque' alpha mode).
+          for (let i = 3; i < img.data.length; i += 4) img.data[i] = 255;
+          g.putImageData(img, 0, 0);
+          drawn = true;
+        }
+        r.buf.unmap();
+        r.busy = false;
+        return drawn;
+      },
+      () => {
+        r.busy = false;
+        return false;
+      },
+    );
   }
 
   encode(enc: GPUCommandEncoder, solver: Solver, view: ViewXform, range: { lo: number; hi: number }, pal: Palette, ov: Overlays, after?: (pass: GPURenderPassEncoder) => void) {
@@ -172,13 +280,14 @@ export class Renderer {
     }
     this.device.queue.writeBuffer(this.viewBuf, 0, d);
     const pass = enc.beginRenderPass({
-      colorAttachments: [{ view: this.ctx.getCurrentTexture().createView(), loadOp: 'clear', storeOp: 'store', clearValue: { r: pal.bg[0], g: pal.bg[1], b: pal.bg[2], a: 1 } }],
+      colorAttachments: [{ view: this.frameTexture().createView(), loadOp: 'clear', storeOp: 'store', clearValue: { r: pal.bg[0], g: pal.bg[1], b: pal.bg[2], a: 1 } }],
     });
     pass.setPipeline(this.pipe);
     pass.setBindGroup(0, bg);
     pass.draw(3);
     after?.(pass);
     pass.end();
+    if (!this.ctx) this.copyOut(enc);
   }
 
   destroy() {
@@ -186,6 +295,10 @@ export class Renderer {
     this.lutBuf.destroy();
     this.dummyBuf.destroy();
     this.dummyTex.destroy();
-    this.ctx.unconfigure();
+    this.target?.destroy();
+    // A buffer still mapping is destroyed too (its read settles false).
+    for (const r of this.readbacks) r.buf.destroy();
+    this.readbacks = [];
+    this.ctx?.unconfigure();
   }
 }

@@ -43,6 +43,13 @@ export function exposeCapture(capture: Capture) {
 export function exposeTestHandle({ store, engine, device, editor }: { ws: Workspace; store: Store; engine: Engine; device: GPUDevice; editor: SketchEditor }) {
   window.__TUNNEL__ = {
     ready: true,
+    /** How frames reach the screen: 'canvas' in the app, 'readback' where the tests ask for it. */
+    present: () => engine.present,
+    /** Once the next frame is on the screen with the overlay over it: an animation frame on the WebGPU canvas; read back, the next frame read back and then one (a slow GPU's frames come far apart). */
+    nextFrame: async () => {
+      if (engine.present === 'readback') await engine.nextShown();
+      await new Promise((r) => requestAnimationFrame(r));
+    },
     /** Drive: a scene as a saved one (an undo step), the selection, the view (centre and metres per CSS px). */
     commit: (s: unknown) => store.commit(parseScene(s)),
     select: (id: string | null) => store.select(id),

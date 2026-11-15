@@ -6,9 +6,9 @@
 // 2. The keys: ? lists the shortcuts; Space pauses and . steps the paused flow by one frame;
 //    R resets it; F fits the view; 1-7 pick the view; [ and ] turn the selected body.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { expect, test } from '@playwright/test';
+import { expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
-import { newTunnel, openTunnel, pngPixels, scaledTimeout, scene, SLOW, stats, T, useTunnelHost } from './helpers.js';
+import { newTunnel, openTunnel, pngPixels, scaledTimeout, scene, SLOW, stats, T, test, useTunnelHost } from './helpers.js';
 
 const env = useTunnelHost('tunnel2d-capture');
 

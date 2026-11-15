@@ -1,7 +1,7 @@
 // Shared steps of the tunnel's browser tests: an app server with the plugin on, a tunnel
 // opened in its workspace, and the page's test handle (window.__TUNNEL__).
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { expect, test } from '@playwright/test';
+import { expect, test as base } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { e2eTemp, NO_GEOMETRY_PROJECT, startHost } from '../../../e2e/support/plugin-suite.js';
@@ -11,6 +11,19 @@ export const KIND = 'tunnel';
 export const PROJECT = NO_GEOMETRY_PROJECT;
 /** The software adapter (CI): the page starts and draws far slower, so its waits are longer. */
 const SOFTWARE = process.env.MAGNUSIM_E2E_WEBGPU === 'swiftshader' || (!!process.env.CI && process.env.MAGNUSIM_E2E_WEBGPU !== 'gpu');
+/**
+ * Frames read back onto a 2D canvas (MAGNUSIM_E2E_PRESENT=readback, set in CI): Chrome on
+ * GitHub's Linux runners has no GPU and cannot show a WebGPU canvas, so the tunnel draws each
+ * frame as always, into a texture of its own, and puts its pixels on the canvas. Every test
+ * page gets it; openTunnel checks the page took it.
+ */
+export const READBACK = process.env.MAGNUSIM_E2E_PRESENT === 'readback';
+export const test = base.extend({
+  context: async ({ context }, use) => {
+    if (READBACK) await context.addInitScript(() => (window.__T2D_PRESENT__ = 'readback'));
+    await use(context);
+  },
+});
 /** How much longer a wait is on the software adapter. */
 export const SLOW = SOFTWARE ? 3 : 1;
 
@@ -70,6 +83,7 @@ export async function openTunnel(host, page, study) {
   let frame = null;
   await expect.poll(() => (frame = page.frames().find((f) => f.url().includes(`/plugins/${KEY}/`))) && true, { timeout: 60_000 }).toBe(true);
   await expect.poll(() => frame.evaluate(() => !!window.__TUNNEL__?.ready).catch(() => false), { timeout: SOFTWARE ? 240_000 : 90_000 }).toBe(true);
+  expect(await frame.evaluate(() => window.__TUNNEL__.present()), 'how frames reach the screen').toBe(READBACK ? 'readback' : 'canvas');
   return frame;
 }
 

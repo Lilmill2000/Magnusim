@@ -7,8 +7,8 @@
 // 2. A preset's panel says when the setup has been changed from it, and Undo brings back the
 //    tunnel there was before it.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { expect, test } from '@playwright/test';
-import { newTunnel, openTunnel, scaledTimeout, scene, useTunnelHost } from './helpers.js';
+import { expect } from '@playwright/test';
+import { newTunnel, openTunnel, scaledTimeout, scene, test, useTunnelHost } from './helpers.js';
 
 const env = useTunnelHost('tunnel2d-presets');
 
