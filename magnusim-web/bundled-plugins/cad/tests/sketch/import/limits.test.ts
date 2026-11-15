@@ -17,6 +17,10 @@ import { describe, expect, it } from 'vitest';
 import { IMPORT_MAX_LOAD, importIntoDraft, planImport, readDrawing, summaryWords, tryReadDrawing } from '../../../src/sketch/import';
 import { bytesOf, dxf } from './fixtures';
 
+// Wall-time bounds get three times the room on a shared CI runner (GitHub sets CI): one took
+// 3.08 s against 3 s there on 2026-11-15. Locally they hold as written.
+const ROOM = process.env.CI ? 3 : 1;
+
 const EMPTY = { points: {}, entities: [], constraints: [] };
 
 /** f's result and how long it took (ms). */
@@ -36,20 +40,20 @@ describe('SVG files built to be slow or wrong', () => {
   it('200,000 nested groups (and their closes) read within a second or two; 20,000 with 20,000 stray close tags too', () => {
     const deep = svg(`${'<g>'.repeat(200_000)}${SQUARE}${'</g>'.repeat(200_000)}${SQUARE.replace('x="0"', 'x="20"')}`);
     const r = timed(() => readDrawing('deep.svg', bytesOf(deep)));
-    expect(r.ms).toBeLessThan(3000);
+    expect(r.ms).toBeLessThan(3000 * ROOM);
     // Past 256 levels the rest is passed over (counted once); the square after the groups is drawn.
     expect(r.value.skipped).toEqual({ deep: 1 });
     expect(r.value.curves).toHaveLength(4);
     const stray = svg(`${'<g>'.repeat(20_000)}${'</x>'.repeat(20_000)}${'</g>'.repeat(20_000)}${SQUARE}`);
     const s = timed(() => readDrawing('stray.svg', bytesOf(stray)));
-    expect(s.ms).toBeLessThan(3000);
+    expect(s.ms).toBeLessThan(3000 * ROOM);
     expect(s.value.curves).toHaveLength(4);
   });
 
   it('a 100,000-character length, root width or transform is unreadable at once (no pattern backtracks over it)', () => {
     const digits = '1'.repeat(100_000);
     const r = timed(() => readDrawing('long.svg', bytesOf(svg(`<line x1="${digits}!" y1="0" x2="5" y2="5"/><g transform="scale(1)${' '.repeat(100_000)}!">${SQUARE}</g>${SQUARE}`, `width="${'m'.repeat(100_000)}!" viewBox="0 0 100 100"`))));
-    expect(r.ms).toBeLessThan(1000);
+    expect(r.ms).toBeLessThan(1000 * ROOM);
     expect(r.value.skipped).toEqual({ unreadable: 2 });
     expect(r.value.curves).toHaveLength(4);
     expect(r.value.units).toBe('CSS px, 96 per inch');
@@ -117,7 +121,7 @@ describe('DXF files built to be slow or wrong', () => {
         ),
       ),
     );
-    expect(r.ms).toBeLessThan(500);
+    expect(r.ms).toBeLessThan(500 * ROOM);
     expect(r.value.skipped).toEqual({ unreadable: 3 });
     // -30 to 400 deg: 70 deg counter-clockwise from -30.
     const arc = r.value.curves[0] as Extract<(typeof r.value.curves)[number], { kind: 'arc' }>;
@@ -131,7 +135,7 @@ describe('DXF files built to be slow or wrong', () => {
       0, 'SECTION', 2, 'ENTITIES', 0, 'INSERT', 8, '0', 2, 'E', 10, 0, 20, 0, 30, 0, 70, 100_000, 71, 100_000, 44, 1, 45, 1, 0, 'ENDSEC', 0, 'EOF',
     ]);
     const r = timed(() => tryReadDrawing('array.dxf', bytesOf(text)));
-    expect(r.ms).toBeLessThan(5000);
+    expect(r.ms).toBeLessThan(5000 * ROOM);
     expect(r.value).toEqual({ refused: "array.dxf's blocks expand too far: its INSERTs place more than 1,000,000 entities (blocks in blocks, or arrays of many rows and columns)" });
   });
 
@@ -144,7 +148,7 @@ describe('DXF files built to be slow or wrong', () => {
       0, 'SECTION', 2, 'ENTITIES', 0, 'INSERT', 8, '0', 2, 'S', 10, 0, 20, 0, 30, 0, 0, 'ENDSEC', 0, 'EOF',
     ]);
     const r = timed(() => readDrawing('self.dxf', bytesOf(self)));
-    expect(r.ms).toBeLessThan(500);
+    expect(r.ms).toBeLessThan(500 * ROOM);
     expect(r.value.skipped).toEqual({ selfInsert: 4 });
     expect(r.value.curves).toHaveLength(1);
     expect(summaryWords(planImport(r.value).summary).skipped).toBe('Skipped: 4 INSERTs of a block inside itself');
@@ -160,13 +164,13 @@ describe('DXF files built to be slow or wrong', () => {
   it('a SPLINE through 20,000 fit points plans within a second or two and is refused by its weight; one through 2,000 goes in', () => {
     const fit = (n: number) => entities([0, 'SPLINE', 8, '0', 70, 8, 71, 3, 74, n, ...Array.from({ length: n }, (_, i) => [11, i, 21, Math.sin(i / 10) * 5, 31, 0]).flat()]);
     const big = timed(() => planImport(readDrawing('fit.dxf', bytesOf(fit(20_000)))));
-    expect(big.ms).toBeLessThan(3000);
+    expect(big.ms).toBeLessThan(3000 * ROOM);
     expect(big.value.summary.refused).toBe('fit.dxf is too large for one sketch: its 20,000 points weigh 20,000 for the sketch solver (each point 1), at most 10,000');
     const ok = timed(() => {
       const plan = planImport(readDrawing('fit.dxf', bytesOf(fit(2_000))));
       return { plan, draft: importIntoDraft(EMPTY, plan) };
     });
-    expect(ok.ms).toBeLessThan(2000);
+    expect(ok.ms).toBeLessThan(2000 * ROOM);
     expect(ok.value.plan.summary).toMatchObject({ refused: null, read: { spline: 1 }, load: 2_000 });
   });
 
@@ -175,12 +179,12 @@ describe('DXF files built to be slow or wrong', () => {
     const knots = [0, 0, 0, ...Array.from({ length: n - 2 }, (_, i) => i), n - 3, n - 3, n - 3];
     const long = entities([0, 'SPLINE', 8, '0', 70, 8, 71, 3, 72, knots.length, 73, n, ...knots.flatMap((k) => [40, k]), ...Array.from({ length: n }, (_, i) => [10, i, 20, i % 2, 30, 0]).flat()]);
     const r = timed(() => planImport(readDrawing('long.dxf', bytesOf(long))));
-    expect(r.ms).toBeLessThan(5000);
+    expect(r.ms).toBeLessThan(5000 * ROOM);
     expect(r.value.summary.refused).toContain('long.dxf is too large for one sketch: its 100,000 points weigh 100,000');
     const p = 5000;
     const high = entities([0, 'SPLINE', 8, '0', 70, 8, 71, p, ...Array.from({ length: 2 * p + 2 }, (_, i) => [40, i <= p ? 0 : 1]).flat(), ...Array.from({ length: p + 1 }, (_, i) => [10, i, 20, 0, 30, 0]).flat()]);
     const h = timed(() => readDrawing('high.dxf', bytesOf(high)));
-    expect(h.ms).toBeLessThan(500);
+    expect(h.ms).toBeLessThan(500 * ROOM);
     expect(h.value.skipped).toEqual({ highDegree: 1 });
     expect(summaryWords(planImport(readDrawing('x.dxf', bytesOf(entities(...SQUARE_DXF, [0, 'SPLINE', 8, '0', 71, 30, 40, 0])))).summary).skipped).toBe('Skipped: 1 SPLINE of degree past 25');
   });

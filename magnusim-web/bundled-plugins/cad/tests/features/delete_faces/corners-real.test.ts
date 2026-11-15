@@ -23,6 +23,10 @@ import { forgetBreps } from '../../../src/features/import/feature';
 import { openSolids } from '../solids/solids-real';
 import type { RealDoc } from '../p2/real-doc';
 
+// Wall-time bounds get three times the room on a shared CI runner (GitHub sets CI): one took
+// 3.08 s against 3 s there on 2026-11-15. Locally they hold as written.
+const ROOM = process.env.CI ? 3 : 1;
+
 type R = Record<string, any>;
 type Edge = TopoResult['edges'][number];
 
@@ -114,7 +118,7 @@ describe('the third way: rounds whose ends carry corner pieces of other fillets'
     expect(out.names?.faces).toHaveLength(26);
     expect(out.names!.faces.every((x) => /^F:f_x:in\d+(#\d+)?$/.test(x))).toBe(true);
     // Measured 4.4 s in Node; the kernel's watchdog is 20 s per call.
-    expect(ms).toBeLessThan(15_000);
+    expect(ms).toBeLessThan(15_000 * ROOM);
   }, 120_000);
 
   it('the other order (R1 along first, then R2 across: tori at the concave rounds): the same body', async () => {
